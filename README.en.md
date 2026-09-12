@@ -28,9 +28,9 @@ One ID means one Pluggy connection. The [Portuguese connection guide](docs/01-co
 ```json
 {
   "mcpServers": {
-    "pluggy": {
+    "financeiro": {
       "command": "npx",
-      "args": ["-y", "github:caiomioto2/pluggy-mcp-starter"],
+      "args": ["-y", "@caiomioto/financeiro-mcp"],
       "env": {
         "PLUGGY_CLIENT_ID": "your-client-id",
         "PLUGGY_CLIENT_SECRET": "your-client-secret",
@@ -45,7 +45,7 @@ One ID means one Pluggy connection. The [Portuguese connection guide](docs/01-co
 
 Run the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunnel. The [tunnel guide](docs/03-openai-secure-mcp-tunnel.md) is in Portuguese.
 
-After the package is published, replace the GitHub argument with `@caiomioto/financeiro-mcp` for a simpler installation.
+`npx` installs the published npm package. Use the GitHub repository only to contribute or self-host.
 
 ## Tools
 

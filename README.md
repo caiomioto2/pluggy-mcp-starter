@@ -40,9 +40,9 @@ Adicione isto à configuração MCP do seu cliente:
 ```json
 {
   "mcpServers": {
-    "pluggy": {
+    "financeiro": {
       "command": "npx",
-      "args": ["-y", "github:caiomioto2/pluggy-mcp-starter"],
+      "args": ["-y", "@caiomioto/financeiro-mcp"],
       "env": {
         "PLUGGY_CLIENT_ID": "seu-client-id",
         "PLUGGY_CLIENT_SECRET": "seu-client-secret",
@@ -60,10 +60,10 @@ claude mcp add pluggy \
   --env PLUGGY_CLIENT_ID=seu-client-id \
   --env PLUGGY_CLIENT_SECRET=seu-client-secret \
   --env PLUGGY_ITEM_IDS=item-id-1,item-id-2 \
-  -- npx -y github:caiomioto2/pluggy-mcp-starter
+  -- npx -y @caiomioto/financeiro-mcp
 ```
 
-Hoje o `npx` baixa o projeto do GitHub. Quando o pacote estiver publicado no npm, troque o argumento por `@caiomioto/financeiro-mcp`.
+O `npx` instala a versão publicada no npm. Use o repositório GitHub apenas para contribuir ou fazer deploy próprio.
 
 ## Uso no ChatGPT web ou Claude.ai
 
