@@ -1,0 +1,51 @@
+{
+  "name": "@caiomioto/pluggy-mcp",
+  "version": "0.1.0",
+  "description": "Self-hosted, read-only MCP server for Pluggy Open Finance data",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "pluggy-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/query.test.mjs",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test"
+  },
+  "engines": {
+    "node": ">=24.10.0"
+  },
+  "keywords": [
+    "mcp",
+    "pluggy",
+    "open-finance",
+    "open-banking",
+    "personal-finance"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caiomioto2/pluggy-mcp-starter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/caiomioto2/pluggy-mcp-starter/issues"
+  },
+  "homepage": "https://github.com/caiomioto2/pluggy-mcp-starter#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^7.0.2"
+  }
+}
