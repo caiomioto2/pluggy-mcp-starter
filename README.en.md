@@ -2,16 +2,28 @@
 
 [Versão em português](README.md)
 
-A read-only MCP server for querying Pluggy accounts and transactions from a financial agent.
+Ask your AI how much you spent, where you spent it, and which accounts are connected. This MCP reads accounts and transactions from your Pluggy application. It does not move money or change data.
 
-## Which MCP should I use?
+## Choose the right option
 
-- Use the vendor-maintained, generic [official Pluggy MCP](https://github.com/pluggyai/pluggy-mcp) when that is all you need.
-- Use this project when you want a focused financial-query interface: two tools, safe read-only SQL, and aggregation across multiple Pluggy Item IDs.
+| Need | Use |
+| --- | --- |
+| Generic tools maintained by Pluggy | The [official Pluggy MCP](https://github.com/pluggyai/pluggy-mcp). |
+| Financial questions across several banks | This project. It combines multiple `itemId`s and provides two query tools. |
+| Codex, Claude Code, Cursor, or Claude Desktop on your computer | Local `npx` installation. No server needed. |
+| ChatGPT web or Claude.ai | An HTTPS HTTP server or the OpenAI Secure MCP Tunnel. |
 
-## Quick local setup
+## Connect every account first
 
-Connect every bank/card first and save each Pluggy `itemId`. Then configure your MCP client:
+Each bank or card connection creates an `itemId`. Save every ID:
+
+```env
+PLUGGY_ITEM_IDS=item-id-santander,item-id-nubank,item-id-itau
+```
+
+One ID means one Pluggy connection. The [Portuguese connection guide](docs/01-conectar-contas-meu-pluggy.md) explains the flow with Meu Pluggy.
+
+## Local installation
 
 ```json
 {
@@ -29,16 +41,18 @@ Connect every bank/card first and save each Pluggy `itemId`. Then configure your
 }
 ```
 
-For cloud clients, deploy the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunnel. Portuguese guides cover [connecting accounts](docs/01-conectar-contas-meu-pluggy.md) and the [tunnel deployment](docs/03-openai-secure-mcp-tunnel.md).
+## Cloud clients
+
+Run the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunnel. The [tunnel guide](docs/03-openai-secure-mcp-tunnel.md) is in Portuguese.
 
 ## Tools
 
-- `pluggy_schema`: returns the available tables and query examples.
-- `pluggy_query`: runs a read-only `SELECT` query over `accounts` and `transactions`.
+- `pluggy_schema` returns the available tables and SQL examples.
+- `pluggy_query` accepts read-only `SELECT` queries over `accounts` and `transactions`.
 
 ## Security
 
-Never commit Pluggy credentials, Item IDs, or financial data. Use a local `.env`, deployment secrets, or a secret manager.
+Never commit Pluggy credentials, Item IDs, tokens, or financial data. Put them in a local `.env`, deployment secrets, or a secret manager.
 
 ## License
 

@@ -1,42 +1,41 @@
 # Pluggy MCP Starter
 
-[English version](README.en.md)
+[Read this in English](README.en.md)
 
-Um MCP — protocolo que permite a uma IA usar ferramentas externas — para consultar, de forma somente leitura, contas e transações do Pluggy. Ele foi pensado para um agente financeiro responder perguntas como: "quanto gastei com Uber este mês?" ou "quais contas tenho conectadas?".
+Pergunte à sua IA quanto gastou, onde gastou e quais contas estão conectadas. Este MCP lê as contas e transações da sua aplicação Pluggy. Ele não move dinheiro nem altera dados.
 
-## Comece por aqui
+Exemplos de perguntas que ele responde:
 
-| Se você quer... | Melhor caminho |
+- "Quanto gastei com Uber neste mês?"
+- "Mostre meus gastos por categoria nos últimos 90 dias."
+- "Quais contas e cartões eu conectei?"
+
+## Qual caminho faz sentido?
+
+| Situação | Use |
 | --- | --- |
-| Um MCP genérico mantido pela própria Pluggy | Use o [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp). |
-| Um agente financeiro com consulta SQL segura e várias conexões bancárias | Use este projeto. |
-| Usar no Codex, Claude Code, Cursor ou Claude Desktop sem servidor | Instale localmente via `npx`. |
-| Usar no ChatGPT web ou Claude.ai | Faça deploy HTTP com Docker ou use o Secure MCP Tunnel da OpenAI. |
+| Você quer as ferramentas genéricas mantidas pela Pluggy | O [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp). |
+| Você quer fazer perguntas financeiras sobre mais de um banco | Este projeto. Ele junta os dados de vários `itemId`s e expõe duas ferramentas de consulta. |
+| Você usa Codex, Claude Code, Cursor ou Claude Desktop no seu computador | A instalação local com `npx`. Não exige servidor. |
+| Você usa ChatGPT web ou Claude.ai | Um servidor HTTP com HTTPS, ou o Secure MCP Tunnel da OpenAI. |
 
-Clientes na nuvem não alcançam o seu computador local. Para eles, escolha uma das opções remotas acima.
+Um cliente na nuvem não consegue abrir um processo no seu computador. Por isso, ChatGPT web e Claude.ai precisam de uma opção remota.
 
-## O que este MCP entrega
+## Antes de instalar
 
-- Busca contas e transações de todos os `itemId`s configurados.
-- Expõe apenas duas ferramentas: `pluggy_schema` e `pluggy_query`.
-- Aceita somente consultas SQL `SELECT`, sem alterar dados.
-- Inclui contas sem transações e bloqueia resultados potencialmente incompletos.
-
-## 1. Conecte seus bancos
-
-Crie uma conexão para cada banco ou cartão e guarde o respectivo `itemId`. O [guia detalhado do Meu Pluggy](docs/01-conectar-contas-meu-pluggy.md) mostra o fluxo para fazer isso pela interface de referência oficial.
-
-Depois, reúna todos os IDs em uma variável:
+Conecte cada banco e cartão que quer consultar. Cada conexão cria um `itemId`. Guarde todos eles:
 
 ```env
 PLUGGY_ITEM_IDS=item-id-santander,item-id-nubank,item-id-itau
 ```
 
-O Pluggy não oferece uma rota para listar itens existentes por motivos de segurança; você precisa registrar os IDs ao criar cada conexão. A rota de contas recebe um `itemId` específico. Veja a documentação oficial de [Items](https://docs.pluggy.ai/docs/item) e [Accounts](https://docs.pluggy.ai/reference/accounts-list).
+Se você informar um único ID, verá somente as contas daquele banco. Este foi o motivo de o projeto original mostrar apenas uma conexão.
 
-## 2. Instale localmente, sem deploy
+O [guia do Meu Pluggy](docs/01-conectar-contas-meu-pluggy.md) mostra como criar e guardar as conexões. A API do Pluggy não lista os Items existentes. Você precisa registrar o ID quando concluir cada conexão. Veja também a documentação de [Items](https://docs.pluggy.ai/docs/item) e [Accounts](https://docs.pluggy.ai/reference/accounts-list).
 
-Crie ou edite a configuração MCP do seu cliente e use:
+## Instalação local
+
+Adicione isto à configuração MCP do seu cliente:
 
 ```json
 {
@@ -54,7 +53,7 @@ Crie ou edite a configuração MCP do seu cliente e use:
 }
 ```
 
-No Claude Code, por exemplo:
+No Claude Code:
 
 ```bash
 claude mcp add pluggy \
@@ -64,11 +63,11 @@ claude mcp add pluggy \
   -- npx -y github:caiomioto2/pluggy-mcp-starter
 ```
 
-Quando o pacote for publicado no npm, você poderá substituir o argumento pelo nome do pacote `@caiomioto/pluggy-mcp`.
+Hoje o `npx` baixa o projeto do GitHub. Quando o pacote estiver publicado no npm, troque o argumento por `@caiomioto/pluggy-mcp`.
 
-## 3. Use na nuvem
+## Uso no ChatGPT web ou Claude.ai
 
-### Opção A: endpoint HTTP próprio
+### Servidor HTTP próprio
 
 ```bash
 git clone https://github.com/caiomioto2/pluggy-mcp-starter.git
@@ -77,19 +76,19 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Preencha o `.env` com suas credenciais, seus `itemId`s e um `MCP_HTTP_TOKEN` longo e aleatório. O endpoint será `http://SEU_SERVIDOR:3000/mcp`; coloque HTTPS na frente dele antes de conectá-lo a um cliente em nuvem.
+Preencha o `.env` com suas credenciais Pluggy, todos os `itemId`s e um `MCP_HTTP_TOKEN` longo. O MCP atende em `http://SEU_SERVIDOR:3000/mcp`. Coloque um proxy HTTPS na frente dele antes de registrá-lo em um cliente na nuvem.
 
-### Opção B: Secure MCP Tunnel da OpenAI
+### Secure MCP Tunnel da OpenAI
 
-O tunnel mantém o servidor privado e abre uma conexão HTTPS de saída para produtos OpenAI compatíveis. O [guia de tunnel](docs/03-openai-secure-mcp-tunnel.md) traz um `docker compose` pronto e o passo a passo de registro no ChatGPT.
+O tunnel conecta um MCP privado a produtos OpenAI compatíveis sem abrir uma URL pública. O [guia de tunnel](docs/03-openai-secure-mcp-tunnel.md) inclui o `docker compose` e o registro no ChatGPT.
 
-O Secure MCP Tunnel não serve para distribuir um plugin público: para isso, publique um endpoint HTTPS estável. Consulte a [documentação oficial da OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+Ele não transforma o projeto em plugin público. Para distribuir um plugin, hospede o MCP em uma URL HTTPS estável. A [documentação da OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) explica a diferença.
 
-## Ferramentas disponíveis
+## Ferramentas
 
-`pluggy_schema` retorna o modelo de dados e exemplos de consulta.
+`pluggy_schema` mostra as tabelas disponíveis e exemplos de SQL.
 
-`pluggy_query` recebe uma consulta como esta:
+`pluggy_query` executa apenas consultas `SELECT` nas tabelas `accounts` e `transactions`.
 
 ```sql
 SELECT merchant_name, description, amount, date, account_name
@@ -99,11 +98,11 @@ ORDER BY date DESC
 LIMIT 50
 ```
 
-Tabelas: `accounts` e `transactions`.
+O servidor bloqueia comandos que escrevem ou alteram o banco de consulta.
 
 ## Segurança
 
-Não envie credenciais do Pluggy, `itemId`s ou extratos para commits, issues, chat público ou arquivos versionados. Use `.env` local, secrets do provedor de deploy ou um cofre de segredos. Este repositório inclui somente exemplos sem dados reais.
+Não coloque `clientSecret`, `itemId`, extrato ou token em commit, issue ou chat público. Use `.env` no computador, secrets do seu deploy ou um cofre de segredos. Este repositório tem somente valores de exemplo.
 
 ## Desenvolvimento
 
