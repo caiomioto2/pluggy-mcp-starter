@@ -1,44 +1,42 @@
 # Pluggy MCP Starter
 
-A self-hosted, read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for querying your Pluggy Open Finance accounts and transactions.
+[English version](README.en.md)
 
-It is designed to be installed by each person with **their own Pluggy credentials and Item IDs**. This repository never collects, hosts, or receives those secrets.
+Um MCP — protocolo que permite a uma IA usar ferramentas externas — para consultar, de forma somente leitura, contas e transações do Pluggy. Ele foi pensado para um agente financeiro responder perguntas como: "quanto gastei com Uber este mês?" ou "quais contas tenho conectadas?".
 
-## What it does
+## Comece por aqui
 
-- Reads accounts and transactions from one or more Pluggy connections.
-- Exposes two MCP tools: `pluggy_schema` and `pluggy_query`.
-- Lets the agent run safe, read-only SQLite `SELECT` queries against the requested date range.
-- Includes accounts with no transactions in the period.
-- Refuses incomplete synchronizations, unsafe SQL, repeated cursors, and partial multi-bank totals.
+| Se você quer... | Melhor caminho |
+| --- | --- |
+| Um MCP genérico mantido pela própria Pluggy | Use o [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp). |
+| Um agente financeiro com consulta SQL segura e várias conexões bancárias | Use este projeto. |
+| Usar no Codex, Claude Code, Cursor ou Claude Desktop sem servidor | Instale localmente via `npx`. |
+| Usar no ChatGPT web ou Claude.ai | Faça deploy HTTP com Docker ou use o Secure MCP Tunnel da OpenAI. |
 
-It does **not** initiate payments, write data, modify Pluggy Items, store financial data, or expose a general SQL database.
+Clientes na nuvem não alcançam o seu computador local. Para eles, escolha uma das opções remotas acima.
 
-## Choose your installation mode
+## O que este MCP entrega
 
-| Where your AI client runs | Recommended mode | Infrastructure required |
-| --- | --- | --- |
-| Claude Desktop, Cursor, Codex, local agents | Local stdio via `npx` | None |
-| A remote/cloud MCP client | Streamable HTTP via Docker | Your own HTTPS-capable host |
+- Busca contas e transações de todos os `itemId`s configurados.
+- Expõe apenas duas ferramentas: `pluggy_schema` e `pluggy_query`.
+- Aceita somente consultas SQL `SELECT`, sem alterar dados.
+- Inclui contas sem transações e bloqueia resultados potencialmente incompletos.
 
-An MCP client running in the cloud cannot reach `localhost` on your computer. There is no secure way around that: use the local mode, or run the optional Docker service in infrastructure you control.
+## 1. Conecte seus bancos
 
-## 1. Prepare Pluggy
+Crie uma conexão para cada banco ou cartão e guarde o respectivo `itemId`. O [guia detalhado do Meu Pluggy](docs/01-conectar-contas-meu-pluggy.md) mostra o fluxo para fazer isso pela interface de referência oficial.
 
-1. Create an application at [Pluggy Dashboard](https://dashboard.pluggy.ai/).
-2. Connect each bank through Pluggy Connect or your preferred Pluggy flow.
-3. Save every returned `itemId`. Pluggy intentionally does not offer an API to list old Items, so capture IDs through the Connect `onSuccess` event or a webhook. See [Pluggy Items](https://docs.pluggy.ai/docs/item).
-4. Copy `.env.example` to `.env` and fill your own values. Never commit it.
+Depois, reúna todos os IDs em uma variável:
 
-```text
-PLUGGY_CLIENT_ID=...
-PLUGGY_CLIENT_SECRET=...
-PLUGGY_ITEM_IDS=item-id-for-bank-a,item-id-for-bank-b
+```env
+PLUGGY_ITEM_IDS=item-id-santander,item-id-nubank,item-id-itau
 ```
 
-## 2. Install locally — no deploy
+O Pluggy não oferece uma rota para listar itens existentes por motivos de segurança; você precisa registrar os IDs ao criar cada conexão. A rota de contas recebe um `itemId` específico. Veja a documentação oficial de [Items](https://docs.pluggy.ai/docs/item) e [Accounts](https://docs.pluggy.ai/reference/accounts-list).
 
-This is the simplest and most private path. Add the following server entry to your MCP client's configuration:
+## 2. Instale localmente, sem deploy
+
+Crie ou edite a configuração MCP do seu cliente e use:
 
 ```json
 {
@@ -47,8 +45,8 @@ This is the simplest and most private path. Add the following server entry to yo
       "command": "npx",
       "args": ["-y", "github:caiomioto2/pluggy-mcp-starter"],
       "env": {
-        "PLUGGY_CLIENT_ID": "your-client-id",
-        "PLUGGY_CLIENT_SECRET": "your-client-secret",
+        "PLUGGY_CLIENT_ID": "seu-client-id",
+        "PLUGGY_CLIENT_SECRET": "seu-client-secret",
         "PLUGGY_ITEM_IDS": "item-id-1,item-id-2"
       }
     }
@@ -56,61 +54,65 @@ This is the simplest and most private path. Add the following server entry to yo
 }
 ```
 
-After the first npm release, the `args` value will become `@caiomioto/pluggy-mcp`.
-
-## 3. Optional: run it in your own cloud
-
-Use this only when the MCP client itself runs remotely and can reach an HTTPS endpoint you control.
+No Claude Code, por exemplo:
 
 ```bash
+claude mcp add pluggy \
+  --env PLUGGY_CLIENT_ID=seu-client-id \
+  --env PLUGGY_CLIENT_SECRET=seu-client-secret \
+  --env PLUGGY_ITEM_IDS=item-id-1,item-id-2 \
+  -- npx -y github:caiomioto2/pluggy-mcp-starter
+```
+
+Quando o pacote for publicado no npm, você poderá substituir o argumento pelo nome do pacote `@caiomioto/pluggy-mcp`.
+
+## 3. Use na nuvem
+
+### Opção A: endpoint HTTP próprio
+
+```bash
+git clone https://github.com/caiomioto2/pluggy-mcp-starter.git
+cd pluggy-mcp-starter
 cp .env.example .env
-# Fill in .env, including a long random MCP_HTTP_TOKEN.
 docker compose up -d --build
 ```
 
-The server listens on `http://127.0.0.1:3000/mcp` and requires:
+Preencha o `.env` com suas credenciais, seus `itemId`s e um `MCP_HTTP_TOKEN` longo e aleatório. O endpoint será `http://SEU_SERVIDOR:3000/mcp`; coloque HTTPS na frente dele antes de conectá-lo a um cliente em nuvem.
 
-```http
-Authorization: Bearer <MCP_HTTP_TOKEN>
+### Opção B: Secure MCP Tunnel da OpenAI
+
+O tunnel mantém o servidor privado e abre uma conexão HTTPS de saída para produtos OpenAI compatíveis. O [guia de tunnel](docs/03-openai-secure-mcp-tunnel.md) traz um `docker compose` pronto e o passo a passo de registro no ChatGPT.
+
+O Secure MCP Tunnel não serve para distribuir um plugin público: para isso, publique um endpoint HTTPS estável. Consulte a [documentação oficial da OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+
+## Ferramentas disponíveis
+
+`pluggy_schema` retorna o modelo de dados e exemplos de consulta.
+
+`pluggy_query` recebe uma consulta como esta:
+
+```sql
+SELECT merchant_name, description, amount, date, account_name
+FROM transactions
+WHERE date >= '2026-01-01'
+ORDER BY date DESC
+LIMIT 50
 ```
 
-Put a TLS reverse proxy in front of it before making it available to any remote MCP client. Do not expose port 3000 directly to the internet.
+Tabelas: `accounts` e `transactions`.
 
-## Available tools
+## Segurança
 
-### `pluggy_schema`
+Não envie credenciais do Pluggy, `itemId`s ou extratos para commits, issues, chat público ou arquivos versionados. Use `.env` local, secrets do provedor de deploy ou um cofre de segredos. Este repositório inclui somente exemplos sem dados reais.
 
-Returns the SQLite tables, field meanings, safe-query limits, and financial caveats.
-
-### `pluggy_query`
-
-Collects the requested date range from every Item in `PLUGGY_ITEM_IDS`, then runs one read-only `SELECT` or `WITH` query.
-
-```json
-{
-  "from": "2026-09-01",
-  "to": "2026-09-30",
-  "sql": "SELECT nome, identificador_mascarado, tipo_conta, transacoes_no_periodo FROM contas ORDER BY tipo_conta, nome"
-}
-```
-
-Call `pluggy_schema` before asking the model to calculate totals. Card payments, transfers, reversals, and pending entries are not automatically reconciled, so a raw debit total is not necessarily a consolidated expense total.
-
-## Development
+## Desenvolvimento
 
 ```bash
 npm install
 npm test
+npm run build
 ```
 
-Requires Node.js 24.10 or later.
+## Licença
 
-## Security and privacy
-
-Financial data is sensitive. Keep credentials and Item IDs in your MCP client environment, secret manager, or cloud environment variables. The process stores fetched data only in memory for up to 15 minutes and never writes it to disk.
-
-If you enable HTTP mode, HTTPS and a strong bearer token are mandatory. See [SECURITY.md](SECURITY.md).
-
-## License
-
-[MIT](LICENSE)
+[MIT](LICENSE).

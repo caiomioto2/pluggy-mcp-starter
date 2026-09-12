@@ -1,0 +1,10 @@
+services:
+  pluggy-mcp-tunnel:
+    build:
+      context: ../..
+      dockerfile: deployment/openai-tunnel/Dockerfile
+    env_file:
+      - ../../.env
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
