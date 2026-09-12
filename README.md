@@ -1,4 +1,4 @@
-# Pluggy MCP Starter
+# Financeiro MCP
 
 [Read this in English](README.en.md)
 
@@ -63,7 +63,7 @@ claude mcp add pluggy \
   -- npx -y github:caiomioto2/pluggy-mcp-starter
 ```
 
-Hoje o `npx` baixa o projeto do GitHub. Quando o pacote estiver publicado no npm, troque o argumento por `@caiomioto/pluggy-mcp`.
+Hoje o `npx` baixa o projeto do GitHub. Quando o pacote estiver publicado no npm, troque o argumento por `@caiomioto/financeiro-mcp`.
 
 ## Uso no ChatGPT web ou Claude.ai
 
@@ -86,13 +86,13 @@ Ele não transforma o projeto em plugin público. Para distribuir um plugin, hos
 
 ## Ferramentas
 
-`pluggy_schema` mostra as tabelas disponíveis e exemplos de SQL.
+`financeiro_schema` mostra as tabelas disponíveis e exemplos de SQL.
 
-`pluggy_query` executa apenas consultas `SELECT` nas tabelas `accounts` e `transactions`.
+`financeiro_query` executa apenas consultas `SELECT` nas tabelas `accounts` e `transactions`.
 
-`pluggy_refresh_item` solicita uma sincronização de uma única conexão autorizada pelo `item_id`. Use quando o usuário acabou de pagar, transferir ou receber algo e quer consultar dados novos. Ela envia um body vazio à Pluggy, não envia credenciais ou MFA e nunca atualiza todas as conexões de uma vez. Com `wait_for_completion: true`, consulta o estado até três vezes, em intervalos de dois segundos.
+`financeiro_refresh_item` solicita uma sincronização de uma única conexão autorizada pelo `item_id`. Use quando o usuário acabou de pagar, transferir ou receber algo e quer consultar dados novos. Ela envia um body vazio à Pluggy, não envia credenciais ou MFA e nunca atualiza todas as conexões de uma vez. Com `wait_for_completion: true`, consulta o estado até três vezes, em intervalos de dois segundos.
 
-`pluggy_refresh_status` mostra o estado atual da sincronização. Quando retornar `UPDATED`, chame `pluggy_query` novamente: o refresh invalida o snapshot em memória de 15 minutos, então a consulta coleta dados novos.
+`financeiro_refresh_status` mostra o estado atual da sincronização. Quando retornar `UPDATED`, chame `financeiro_query` novamente: o refresh invalida o snapshot em memória de 15 minutos, então a consulta coleta dados novos.
 
 Cada linha de `accounts` também informa a origem Pluggy: `item_id`, `connector_id`, `connector_name` e, quando a API disponibiliza, `institution_name`. Contas e cartões da mesma conexão compartilham o mesmo `item_id`. O projeto não tenta deduzir a instituição por descrição de transação; se a Pluggy não enviar o nome da instituição, o campo vem como `NULL`.
 
@@ -109,9 +109,9 @@ O servidor bloqueia comandos que escrevem ou alteram o banco de consulta.
 Exemplo de sequência:
 
 ```text
-pluggy_refresh_item({ item_id: "...", wait_for_completion: true })
-pluggy_refresh_status({ item_id: "..." })
-pluggy_query({ sql: "SELECT * FROM accounts", from: "2026-01-01", to: "2026-01-31" })
+financeiro_refresh_item({ item_id: "...", wait_for_completion: true })
+financeiro_refresh_status({ item_id: "..." })
+financeiro_query({ sql: "SELECT * FROM accounts", from: "2026-01-01", to: "2026-01-31" })
 ```
 
 ## Segurança

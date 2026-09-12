@@ -1,11 +1,11 @@
 {
-  "name": "@caiomioto/pluggy-mcp",
-  "version": "0.1.0",
-  "description": "Self-hosted, read-only MCP server for Pluggy Open Finance data",
+  "name": "@caiomioto/financeiro-mcp",
+  "version": "0.2.0",
+  "description": "MCP financeiro auto-hospedado para dados Open Finance via Pluggy",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "pluggy-mcp": "dist/index.js"
+    "financeiro-mcp": "dist/index.js"
   },
   "files": [
     "dist",

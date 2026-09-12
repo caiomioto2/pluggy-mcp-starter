@@ -126,18 +126,18 @@ function errorText(error: unknown): string {
 
 
 export function createFinanceServer() {
-  const server = new McpServer({ name: "pluggy-mcp-starter", version: "0.2.0" });
+  const server = new McpServer({ name: "financeiro-mcp", version: "0.2.0" });
   const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
   const result = (value: Record<string, unknown>) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], structuredContent: value });
-  server.registerTool("pluggy_schema", {
-    title: "Pluggy finance schema", description: "SQL fields, semantics, and transaction limitations. Does not access secrets.",
+  server.registerTool("financeiro_schema", {
+    title: "Estrutura das finanças", description: "Campos SQL, semântica e limitações das transações. Não consulta segredos.",
     inputSchema: z.object({}).strict(), annotations,
   }, async () => result(schema));
   const cache = new TimedSnapshotCache<Awaited<ReturnType<typeof collectMany>>>();
   const date = z.string().refine(s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0,10) === s, "Data inválida YYYY-MM-DD");
-  server.registerTool("pluggy_query", {
-    title: "Query Pluggy accounts and transactions with SQL",
-    description: "Read-only SQLite SELECT over accounts and transactions for the requested UTC period. accounts includes every account returned by every configured Pluggy connection, including accounts without transactions. Reuses collection in memory for 15 minutes; a refresh invalidates that snapshot, so query again after the Item completes. Call pluggy_schema before computing totals.",
+  server.registerTool("financeiro_query", {
+    title: "Consultar contas e transações com SQL",
+    description: "SELECT SQLite somente leitura sobre contas e transações no período UTC informado. contas inclui cada conta de cada conexão Pluggy configurada, inclusive sem transações. Reutiliza a coleta em memória por 15 minutos; um refresh invalida esse snapshot, então consulte novamente após o Item concluir. Consulte financeiro_schema antes de calcular totais.",
     inputSchema: z.object({ sql: z.string().min(1).max(8000), from: date, to: date, limit: z.number().int().min(1).max(200).default(100) }).strict(),
     annotations,
   }, async ({sql, from, to, limit}) => {
@@ -150,15 +150,15 @@ export function createFinanceServer() {
     } catch (error) { return {isError:true, content:[{type:"text" as const,text:errorText(error)}]}; }
   });
   const itemId = z.string().uuid();
-  server.registerTool("pluggy_refresh_item", {
-    title: "Refresh one Pluggy connection",
-    description: "Requests a real-time sync for one authorized Pluggy Item. Use after a payment, transfer, income, or other recent financial change. It never sends credentials or MFA. wait_for_completion polls only three times and never repeats the refresh request.",
+  server.registerTool("financeiro_refresh_item", {
+    title: "Atualizar uma conexão financeira",
+    description: "Solicita sincronização em tempo real de um único Item Pluggy autorizado. Use após pagamento, transferência, recebimento ou outra alteração recente. Nunca envia credenciais ou MFA. wait_for_completion consulta o estado no máximo três vezes e nunca repete o refresh.",
     inputSchema: z.object({ item_id:itemId, wait_for_completion:z.boolean().optional().default(false) }).strict(),
     annotations: { readOnlyHint:false, destructiveHint:false, idempotentHint:false, openWorldHint:true },
   }, async ({item_id,wait_for_completion}) => result(await refreshItem({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>cache.invalidate(),waitForCompletion:wait_for_completion})));
-  server.registerTool("pluggy_refresh_status", {
-    title: "Check a Pluggy connection refresh",
-    description: "Reads the real synchronization state for one authorized Pluggy Item. After it is UPDATED, the next pluggy_query collects fresh data.",
+  server.registerTool("financeiro_refresh_status", {
+    title: "Verificar atualização de uma conexão",
+    description: "Consulta o estado real de sincronização de um Item Pluggy autorizado. Quando estiver UPDATED, a próxima financeiro_query coleta dados novos.",
     inputSchema: z.object({item_id:itemId}).strict(), annotations,
   }, async ({item_id}) => result(await refreshStatus({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>cache.invalidate()})));
   return server;

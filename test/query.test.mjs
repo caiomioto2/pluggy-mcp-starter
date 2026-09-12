@@ -81,10 +81,10 @@ test('existing account queries continue to work with added columns',async()=>{
  const r=await runQuery(rows,accounts,'SELECT conta_id,nome,identificador_mascarado,tipo_conta FROM contas',100);
  assert.deepEqual(r.rows,[{conta_id:'a',nome:'Cartão',identificador_mascarado:'***2BC',tipo_conta:'CREDIT'}]);
 });
-test('MCP exposes query and controlled refresh tools without credentials',async()=>{
+test('MCP expõe as ferramentas financeiras sem credenciais',async()=>{
  const client=new Client({name:'test',version:'1'});
  const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{},stderr:'pipe'});
- try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['pluggy_schema','pluggy_query','pluggy_refresh_item','pluggy_refresh_status']);const r=await client.callTool({name:'pluggy_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+ try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_refresh_item','financeiro_refresh_status']);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
 });
 const itemId='11111111-1111-4111-8111-111111111111';
 test('authorized refresh sends one empty PATCH and invalidates cache',async()=>{
