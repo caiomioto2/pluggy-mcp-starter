@@ -6,7 +6,7 @@ import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 const tx=(id,amount,type='DEBIT')=>({id,amount,type,accountId:'a',date:'2026-09-01T12:00:00Z',description:'Teste',currencyCode:'BRL',status:'POSTED',category:'Mercado'});
 const rows=[normalize(tx('1',100),'CREDIT'),normalize(tx('2',-100,'CREDIT'),'CREDIT')];
-const accounts=[{conta_id:'a',tipo_conta:'CREDIT',subtipo:'CREDIT_CARD',nome:'Cartão',identificador_mascarado:'***2BC',saldo_centavos:0,moeda:'BRL',limite_credito_centavos:100000,limite_disponivel_centavos:90000,transacoes_no_periodo:2}];
+const accounts=[{conta_id:'a',item_id:'item-a',connector_id:'101',connector_name:'Example Bank Business',institution_name:'Example Bank',tipo_conta:'CREDIT',subtipo:'CREDIT_CARD',nome:'Cartão',identificador_mascarado:'***2BC',saldo_centavos:0,moeda:'BRL',limite_credito_centavos:100000,limite_disponivel_centavos:90000,transacoes_no_periodo:2}];
 test('cartão positivo é débito; pagamento negativo não é gasto',async()=>{
  const r=await runQuery(rows,accounts,'SELECT SUM(debito_bruto_centavos) AS total FROM transacoes',100);
  assert.equal(r.rows[0].total,10000);
@@ -48,6 +48,36 @@ test('coleta agrega todas as conexões configuradas',async()=>{
  const result=await collectMany(req,['item-a','item-b'],'2026-09-01','2026-09-30');
  assert.equal(result.coverage.connections,2);assert.equal(result.coverage.accounts,2);assert.equal(result.coverage.transactions,2);
  assert.deepEqual(result.accounts.map(account=>account.identificador_mascarado),['***111','***222']);
+});
+test('accounts preserve their Item and real Connector metadata',async()=>{
+ const req=async path=>{
+  if(path==='/items/item-business') return {executionStatus:'SUCCESS',connector:{id:201,name:'Example Bank Business',institution:{name:'Example Bank'}}};
+  if(path.startsWith('/accounts')) return {results:[{id:'checking',itemId:'item-business',type:'BANK',number:'***1111'},{id:'card',itemId:'item-business',type:'CREDIT',number:'***2222'}]};
+  return {results:[],next:null};
+ };
+ const result=await collect(req,'item-business','2026-09-01','2026-09-30');
+ assert.deepEqual(result.accounts.map(({conta_id,item_id,connector_id,connector_name,institution_name})=>({conta_id,item_id,connector_id,connector_name,institution_name})),[
+  {conta_id:'checking',item_id:'item-business',connector_id:'201',connector_name:'Example Bank Business',institution_name:'Example Bank'},
+  {conta_id:'card',item_id:'item-business',connector_id:'201',connector_name:'Example Bank Business',institution_name:'Example Bank'}
+ ]);
+});
+test('Connector lookup is shared and missing institution metadata remains NULL',async()=>{
+ const paths=[];
+ const req=async path=>{
+  paths.push(path);
+  if(path==='/items/item-a'||path==='/items/item-b') return {executionStatus:'SUCCESS',connectorId:101};
+  if(path==='/connectors/101') return {id:101,name:'Example Bank'};
+  if(path.includes('itemId=item-a')) return {results:[{id:'a',itemId:'item-a',type:'BANK'}]};
+  if(path.includes('itemId=item-b')) return {results:[{id:'b',itemId:'item-b',type:'CREDIT'}]};
+  return {results:[],next:null};
+ };
+ const result=await collectMany(req,['item-a','item-b'],'2026-09-01','2026-09-30');
+ assert.equal(paths.filter(path=>path==='/connectors/101').length,1);
+ assert.deepEqual(result.accounts.map(account=>[account.item_id,account.connector_id,account.connector_name,account.institution_name]),[['item-a','101','Example Bank',null],['item-b','101','Example Bank',null]]);
+});
+test('existing account queries continue to work with added columns',async()=>{
+ const r=await runQuery(rows,accounts,'SELECT conta_id,nome,identificador_mascarado,tipo_conta FROM contas',100);
+ assert.deepEqual(r.rows,[{conta_id:'a',nome:'Cartão',identificador_mascarado:'***2BC',tipo_conta:'CREDIT'}]);
 });
 test('MCP exposes only two tools and schema works without credentials',async()=>{
  const client=new Client({name:'test',version:'1'});

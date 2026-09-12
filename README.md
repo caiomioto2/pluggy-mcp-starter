@@ -90,6 +90,8 @@ Ele não transforma o projeto em plugin público. Para distribuir um plugin, hos
 
 `pluggy_query` executa apenas consultas `SELECT` nas tabelas `accounts` e `transactions`.
 
+Cada linha de `accounts` também informa a origem Pluggy: `item_id`, `connector_id`, `connector_name` e, quando a API disponibiliza, `institution_name`. Contas e cartões da mesma conexão compartilham o mesmo `item_id`. O projeto não tenta deduzir a instituição por descrição de transação; se a Pluggy não enviar o nome da instituição, o campo vem como `NULL`.
+
 ```sql
 SELECT merchant_name, description, amount, date, account_name
 FROM transactions

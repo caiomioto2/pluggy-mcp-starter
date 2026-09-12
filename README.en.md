@@ -50,6 +50,8 @@ Run the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunne
 - `pluggy_schema` returns the available tables and SQL examples.
 - `pluggy_query` accepts read-only `SELECT` queries over `accounts` and `transactions`.
 
+Every `accounts` row also keeps its Pluggy origin: `item_id`, `connector_id`, `connector_name`, and, when Pluggy returns it, `institution_name`. Accounts and cards from the same connection share an `item_id`. The project never infers an institution from transaction descriptions; when Pluggy does not provide it, the field is `NULL`.
+
 ## Security
 
 Never commit Pluggy credentials, Item IDs, tokens, or financial data. Put them in a local `.env`, deployment secrets, or a secret manager.
