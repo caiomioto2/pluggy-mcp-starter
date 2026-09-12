@@ -6,6 +6,8 @@ import { z } from "zod";
 import { runQuery, schema } from "./query.js";
 import { collectMany } from "./collect.js";
 import { startHttpServer } from "./http.js";
+import { TimedSnapshotCache } from "./cache.js";
+import { refreshItem, refreshStatus } from "./refresh.js";
 
 const API_URL = "https://api.pluggy.ai";
 const PAGE_SIZE = 500;
@@ -124,32 +126,41 @@ function errorText(error: unknown): string {
 
 
 export function createFinanceServer() {
-  const server = new McpServer({ name: "pluggy-mcp-starter", version: "0.1.0" });
+  const server = new McpServer({ name: "pluggy-mcp-starter", version: "0.2.0" });
   const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
   const result = (value: Record<string, unknown>) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], structuredContent: value });
   server.registerTool("pluggy_schema", {
     title: "Pluggy finance schema", description: "SQL fields, semantics, and transaction limitations. Does not access secrets.",
     inputSchema: z.object({}).strict(), annotations,
   }, async () => result(schema));
-  let cache: { key: string; at: number; data: Awaited<ReturnType<typeof collectMany>> } | undefined;
+  const cache = new TimedSnapshotCache<Awaited<ReturnType<typeof collectMany>>>();
   const date = z.string().refine(s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0,10) === s, "Data inválida YYYY-MM-DD");
   server.registerTool("pluggy_query", {
     title: "Query Pluggy accounts and transactions with SQL",
-    description: "Read-only SQLite SELECT over accounts and transactions for the requested UTC period. accounts includes every account returned by every configured Pluggy connection, including accounts without transactions. Reuses collection in memory for 15 minutes and returns coverage metadata. Call pluggy_schema before computing totals.",
+    description: "Read-only SQLite SELECT over accounts and transactions for the requested UTC period. accounts includes every account returned by every configured Pluggy connection, including accounts without transactions. Reuses collection in memory for 15 minutes; a refresh invalidates that snapshot, so query again after the Item completes. Call pluggy_schema before computing totals.",
     inputSchema: z.object({ sql: z.string().min(1).max(8000), from: date, to: date, limit: z.number().int().min(1).max(200).default(100) }).strict(),
     annotations,
   }, async ({sql, from, to, limit}) => {
     try {
       if (from > to || (Date.parse(to)-Date.parse(from))/86400000 > 366) throw new Error("Use período ordenado de até 366 dias.");
       const key = from + ":" + to;
-      if (!cache || cache.key !== key || Date.now()-cache.at > 900000) {
-        const data = await collectMany(pluggyRequest, configuredItemIds(), from, to);
-        cache = {key, at: Date.now(), data};
-      }
-      const answer = await runQuery(cache.data.rows, cache.data.accounts, sql, limit);
-      return result({...answer, period: {from,to,timezone:"UTC"}, collectedAt: new Date(cache.at).toISOString(), coverage: cache.data.coverage, warnings: schema.warnings});
+      const snapshot = await cache.get(key, 900000, () => collectMany(pluggyRequest, configuredItemIds(), from, to));
+      const answer = await runQuery(snapshot.value.rows, snapshot.value.accounts, sql, limit);
+      return result({...answer, period: {from,to,timezone:"UTC"}, collectedAt: new Date(snapshot.at).toISOString(), coverage: snapshot.value.coverage, warnings: schema.warnings});
     } catch (error) { return {isError:true, content:[{type:"text" as const,text:errorText(error)}]}; }
   });
+  const itemId = z.string().uuid();
+  server.registerTool("pluggy_refresh_item", {
+    title: "Refresh one Pluggy connection",
+    description: "Requests a real-time sync for one authorized Pluggy Item. Use after a payment, transfer, income, or other recent financial change. It never sends credentials or MFA. wait_for_completion polls only three times and never repeats the refresh request.",
+    inputSchema: z.object({ item_id:itemId, wait_for_completion:z.boolean().optional().default(false) }).strict(),
+    annotations: { readOnlyHint:false, destructiveHint:false, idempotentHint:false, openWorldHint:true },
+  }, async ({item_id,wait_for_completion}) => result(await refreshItem({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>cache.invalidate(),waitForCompletion:wait_for_completion})));
+  server.registerTool("pluggy_refresh_status", {
+    title: "Check a Pluggy connection refresh",
+    description: "Reads the real synchronization state for one authorized Pluggy Item. After it is UPDATED, the next pluggy_query collects fresh data.",
+    inputSchema: z.object({item_id:itemId}).strict(), annotations,
+  }, async ({item_id}) => result(await refreshStatus({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>cache.invalidate()})));
   return server;
 }
 

@@ -9,7 +9,7 @@ Ask your AI how much you spent, where you spent it, and which accounts are conne
 | Need | Use |
 | --- | --- |
 | Generic tools maintained by Pluggy | The [official Pluggy MCP](https://github.com/pluggyai/pluggy-mcp). |
-| Financial questions across several banks | This project. It combines multiple `itemId`s and provides two query tools. |
+| Financial questions or a controlled refresh of one connection across several banks | This project. It combines multiple `itemId`s and provides query and controlled refresh tools. |
 | Codex, Claude Code, Cursor, or Claude Desktop on your computer | Local `npx` installation. No server needed. |
 | ChatGPT web or Claude.ai | An HTTPS HTTP server or the OpenAI Secure MCP Tunnel. |
 
@@ -49,8 +49,18 @@ Run the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunne
 
 - `pluggy_schema` returns the available tables and SQL examples.
 - `pluggy_query` accepts read-only `SELECT` queries over `accounts` and `transactions`.
+- `pluggy_refresh_item` requests a sync for one authorized `item_id`. Use it after a payment, transfer, income, or other recent change. It sends an empty body to Pluggy, never sends credentials or MFA, and never refreshes every connection at once. With `wait_for_completion: true`, it polls at most three times at two-second intervals.
+- `pluggy_refresh_status` reads the current sync state. When it returns `UPDATED`, call `pluggy_query` again: refresh invalidates the 15-minute in-memory snapshot, so the query collects fresh data.
 
 Every `accounts` row also keeps its Pluggy origin: `item_id`, `connector_id`, `connector_name`, and, when Pluggy returns it, `institution_name`. Accounts and cards from the same connection share an `item_id`. The project never infers an institution from transaction descriptions; when Pluggy does not provide it, the field is `NULL`.
+
+Example sequence:
+
+```text
+pluggy_refresh_item({ item_id: "...", wait_for_completion: true })
+pluggy_refresh_status({ item_id: "..." })
+pluggy_query({ sql: "SELECT * FROM accounts", from: "2026-01-01", to: "2026-01-31" })
+```
 
 ## Security
 

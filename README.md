@@ -15,7 +15,7 @@ Exemplos de perguntas que ele responde:
 | Situação | Use |
 | --- | --- |
 | Você quer as ferramentas genéricas mantidas pela Pluggy | O [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp). |
-| Você quer fazer perguntas financeiras sobre mais de um banco | Este projeto. Ele junta os dados de vários `itemId`s e expõe duas ferramentas de consulta. |
+| Você quer fazer perguntas financeiras ou atualizar uma conexão específica em mais de um banco | Este projeto. Ele junta os dados de vários `itemId`s e expõe ferramentas de consulta e refresh controlado. |
 | Você usa Codex, Claude Code, Cursor ou Claude Desktop no seu computador | A instalação local com `npx`. Não exige servidor. |
 | Você usa ChatGPT web ou Claude.ai | Um servidor HTTP com HTTPS, ou o Secure MCP Tunnel da OpenAI. |
 
@@ -90,6 +90,10 @@ Ele não transforma o projeto em plugin público. Para distribuir um plugin, hos
 
 `pluggy_query` executa apenas consultas `SELECT` nas tabelas `accounts` e `transactions`.
 
+`pluggy_refresh_item` solicita uma sincronização de uma única conexão autorizada pelo `item_id`. Use quando o usuário acabou de pagar, transferir ou receber algo e quer consultar dados novos. Ela envia um body vazio à Pluggy, não envia credenciais ou MFA e nunca atualiza todas as conexões de uma vez. Com `wait_for_completion: true`, consulta o estado até três vezes, em intervalos de dois segundos.
+
+`pluggy_refresh_status` mostra o estado atual da sincronização. Quando retornar `UPDATED`, chame `pluggy_query` novamente: o refresh invalida o snapshot em memória de 15 minutos, então a consulta coleta dados novos.
+
 Cada linha de `accounts` também informa a origem Pluggy: `item_id`, `connector_id`, `connector_name` e, quando a API disponibiliza, `institution_name`. Contas e cartões da mesma conexão compartilham o mesmo `item_id`. O projeto não tenta deduzir a instituição por descrição de transação; se a Pluggy não enviar o nome da instituição, o campo vem como `NULL`.
 
 ```sql
@@ -101,6 +105,14 @@ LIMIT 50
 ```
 
 O servidor bloqueia comandos que escrevem ou alteram o banco de consulta.
+
+Exemplo de sequência:
+
+```text
+pluggy_refresh_item({ item_id: "...", wait_for_completion: true })
+pluggy_refresh_status({ item_id: "..." })
+pluggy_query({ sql: "SELECT * FROM accounts", from: "2026-01-01", to: "2026-01-31" })
+```
 
 ## Segurança
 

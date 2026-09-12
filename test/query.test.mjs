@@ -2,6 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runQuery} from '../dist/query.js';
 import {collect,collectMany,normalize} from '../dist/collect.js';
+import {TimedSnapshotCache} from '../dist/cache.js';
+import {refreshItem,refreshStatus} from '../dist/refresh.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 const tx=(id,amount,type='DEBIT')=>({id,amount,type,accountId:'a',date:'2026-09-01T12:00:00Z',description:'Teste',currencyCode:'BRL',status:'POSTED',category:'Mercado'});
@@ -79,8 +81,42 @@ test('existing account queries continue to work with added columns',async()=>{
  const r=await runQuery(rows,accounts,'SELECT conta_id,nome,identificador_mascarado,tipo_conta FROM contas',100);
  assert.deepEqual(r.rows,[{conta_id:'a',nome:'Cartão',identificador_mascarado:'***2BC',tipo_conta:'CREDIT'}]);
 });
-test('MCP exposes only two tools and schema works without credentials',async()=>{
+test('MCP exposes query and controlled refresh tools without credentials',async()=>{
  const client=new Client({name:'test',version:'1'});
  const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{},stderr:'pipe'});
- try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['pluggy_schema','pluggy_query']);const r=await client.callTool({name:'pluggy_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+ try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['pluggy_schema','pluggy_query','pluggy_refresh_item','pluggy_refresh_status']);const r=await client.callTool({name:'pluggy_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+});
+const itemId='11111111-1111-4111-8111-111111111111';
+test('authorized refresh sends one empty PATCH and invalidates cache',async()=>{
+ const calls=[];let invalidated=0;
+ const result=await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>invalidated++,request:async(path,init)=>{calls.push({path,init});return {status:'UPDATING'};}});
+ assert.equal(result.refresh_requested,true);assert.equal(invalidated,1);assert.deepEqual(calls,[{path:'/items/'+itemId,init:{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'}}]);
+});
+test('unconfigured Item never reaches the Pluggy API',async()=>{
+ let calls=0;const result=await refreshItem({itemId,allowedItemIds:[],invalidateCache:()=>{},request:async()=>{calls++;return {};}});
+ assert.equal(result.reason,'ITEM_NOT_ALLOWED');assert.equal(calls,0);
+});
+test('refresh handles conflict, rate limit, MFA, credentials and missing Item safely',async()=>{
+ for(const [status,code,expected,field] of [[409,'ITEM_UPDATING','ITEM_UPDATING','retryable'],[429,'BEFORE_ALLOWED_FREQUENCY','RATE_LIMIT','retryable'],[400,'WAITING_USER_INPUT','WAITING_USER_INPUT','requires_user_action'],[400,'INVALID_CREDENTIALS','INVALID_CREDENTIALS','requires_reconnection'],[404,undefined,'ITEM_NOT_FOUND',undefined]]){
+  const error=Object.assign(new Error('api-key must-not-leak'),{status,code});
+  const result=await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>{},request:async()=>{throw error;}});
+  assert.equal(result.reason,expected);if(field)assert.equal(result[field],true);assert.equal(JSON.stringify(result).includes('must-not-leak'),false);
+ }
+});
+test('bounded polling checks status without another PATCH',async()=>{
+ let gets=0;let waits=0;
+ const result=await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>{},waitForCompletion:true,wait:async()=>{waits++;},request:async(_path,init)=>{
+  if(init?.method==='PATCH')return {status:'UPDATING'};gets++;return {status:gets===1?'UPDATING':'UPDATED',executionStatus:'SUCCESS'};
+ }});
+ assert.equal(result.completed,true);assert.equal(gets,2);assert.equal(waits,2);
+});
+test('refresh status is authorized and completion invalidates cache',async()=>{
+ let invalidated=0;const result=await refreshStatus({itemId,allowedItemIds:[itemId],invalidateCache:()=>invalidated++,request:async()=>({status:'UPDATED',executionStatus:'SUCCESS'})});
+ assert.equal(result.completed,true);assert.equal(invalidated,1);
+});
+test('query cache does not retain a snapshot after refresh',async()=>{
+ const cache=new TimedSnapshotCache();let loads=0;
+ assert.equal((await cache.get('period',900000,async()=>({version:++loads}))).value.version,1);
+ await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>cache.invalidate(),request:async()=>({status:'UPDATING'})});
+ assert.equal((await cache.get('period',900000,async()=>({version:++loads}))).value.version,2);
 });
