@@ -1,41 +1,53 @@
-# Financeiro MCP
+# Financeiro MCP — Pluggy Open Finance para Agentes de IA
 
-[Read this in English](README.en.md)
+[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6.svg)](https://www.typescriptlang.org/)
+[![MCP](https://img.shields.io/badge/MCP-Protocol-green.svg)](https://modelcontextprotocol.io/)
 
-Pergunte à sua IA quanto gastou, onde gastou e quais contas estão conectadas. Este MCP lê as contas e transações da sua aplicação Pluggy. Ele não move dinheiro nem altera dados.
+Pergunte à sua IA quanto gastou, onde gastou e quais contas estão conectadas. Este servidor MCP exponde suas contas e transações do Pluggy Open Finance para agentes de IA — **read-only, sem mover dinheiro nem alterar dados**.
 
-Exemplos de perguntas que ele responde:
+## Por que esse projeto existe
 
-- "Quanto gastei com Uber neste mês?"
-- "Mostre meus gastos por categoria nos últimos 90 dias."
-- "Quais contas e cartões eu conectei?"
+O [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp) é ótimo para demonstrações rápidas com um único `itemId`. Mas na vida real você tem Santander, Nubank, Itaú, Inter... cada um gera um `itemId` diferente, e seu agente precisa consultar todos de uma vez.
+
+Este projeto:
+- **Agrega múltiplos `itemId`s** em um único banco de dados local
+- **Expor ferramentas em português** (`financeiro_query`, `financeiro_schema`, `financeiro_refresh_item`)
+- **Read-only por padrão** — o agente consulta, nunca movimenta
+- **Self-hosted** — seus dados financeiros não saem do seu servidor
 
 ## Qual caminho faz sentido?
 
 | Situação | Use |
 | --- | --- |
-| Você quer as ferramentas genéricas mantidas pela Pluggy | O [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp). |
-| Você quer fazer perguntas financeiras ou atualizar uma conexão específica em mais de um banco | Este projeto. Ele junta os dados de vários `itemId`s e expõe ferramentas de consulta e refresh controlado. |
-| Você usa Codex, Claude Code, Cursor ou Claude Desktop no seu computador | A instalação local com `npx`. Não exige servidor. |
-| Você usa ChatGPT web ou Claude.ai | Um servidor HTTP com HTTPS, ou o Secure MCP Tunnel da OpenAI. |
+| Demonstração rápida com um banco só | [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp) |
+| Consultar múltiplos bancos em agentes de IA | **Este projeto** |
+| Codex, Claude Code, Cursor, Claude Desktop | Instalação local com `npx` (não exige servidor) |
+| ChatGPT web ou Claude.ai | Servidor HTTP com HTTPS + Secure MCP Tunnel |
 
-Um cliente na nuvem não consegue abrir um processo no seu computador. Por isso, ChatGPT web e Claude.ai precisam de uma opção remota.
+## Exemplos de perguntas que ele responde
+
+- "Quanto gastei com Uber neste mês?"
+- "Mostre meus gastos por categoria nos últimos 90 dias."
+- "Quais contas e cartões eu conectei?"
+- "Qual meu saldo consolidado?"
+- "Liste as últimas 50 transações do Nubank"
 
 ## Antes de instalar
 
-Conecte cada banco e cartão que quer consultar. Cada conexão cria um `itemId`. Guarde todos eles:
+Conecte cada banco e cartão no [Meu Pluggy](https://app.pluggy.ai/). Cada conexão gera um `itemId`:
 
 ```env
 PLUGGY_ITEM_IDS=item-id-santander,item-id-nubank,item-id-itau
 ```
 
-Se você informar um único ID, verá somente as contas daquele banco. Este foi o motivo de o projeto original mostrar apenas uma conexão.
+> ⚠️ A API do Pluggy **não lista** `itemId`s existentes. Anote cada um quando conectar!
 
-O [guia do Meu Pluggy](docs/01-conectar-contas-meu-pluggy.md) mostra como criar e guardar as conexões. A API do Pluggy não lista os Items existentes. Você precisa registrar o ID quando concluir cada conexão. Veja também a documentação de [Items](https://docs.pluggy.ai/docs/item) e [Accounts](https://docs.pluggy.ai/reference/accounts-list).
+Guia passo a passo: [docs/01-conectar-contas-meu-pluggy.md](docs/01-conectar-contas-meu-pluggy.md)
 
 ## Instalação local
 
-Adicione isto à configuração MCP do seu cliente:
+Adicione ao seu cliente MCP:
 
 ```json
 {
@@ -63,11 +75,7 @@ claude mcp add pluggy \
   -- npx -y @caiomioto/financeiro-mcp
 ```
 
-O `npx` instala a versão publicada no npm. Use o repositório GitHub apenas para contribuir ou fazer deploy próprio.
-
-## Uso no ChatGPT web ou Claude.ai
-
-### Servidor HTTP próprio
+## Servidor HTTP (ChatGPT / Claude.ai)
 
 ```bash
 git clone https://github.com/caiomioto2/pluggy-mcp-starter.git
@@ -76,47 +84,47 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Preencha o `.env` com suas credenciais Pluggy, todos os `itemId`s e um `MCP_HTTP_TOKEN` longo. O MCP atende em `http://SEU_SERVIDOR:3000/mcp`. Coloque um proxy HTTPS na frente dele antes de registrá-lo em um cliente na nuvem.
+O MCP atende em `http://SEU_SERVIDOR:3000/mcp`. Coloque um proxy HTTPS na frente.
 
-### Secure MCP Tunnel da OpenAI
+Para OpenAI Secure MCP Tunnel, veja: [docs/03-openai-secure-mcp-tunnel.md](docs/03-openai-secure-mcp-tunnel.md)
 
-O tunnel conecta um MCP privado a produtos OpenAI compatíveis sem abrir uma URL pública. O [guia de tunnel](docs/03-openai-secure-mcp-tunnel.md) inclui o `docker compose` e o registro no ChatGPT.
+## Ferramentas disponíveis
 
-Ele não transforma o projeto em plugin público. Para distribuir um plugin, hospede o MCP em uma URL HTTPS estável. A [documentação da OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) explica a diferença.
+| Ferramenta | O que faz |
+| --- | --- |
+| `financeiro_schema` | Lista tabelas (`accounts`, `transactions`) e exemplos de SQL |
+| `financeiro_query` | Executa `SELECT` nas tabelas financeiras (read-only) |
+| `financeiro_refresh_item` | Solicita sincronização de uma conexão específica |
+| `financeiro_refresh_status` | Mostra estado da sincronização |
 
-## Ferramentas
-
-`financeiro_schema` mostra as tabelas disponíveis e exemplos de SQL.
-
-`financeiro_query` executa apenas consultas `SELECT` nas tabelas `accounts` e `transactions`.
-
-`financeiro_refresh_item` solicita uma sincronização de uma única conexão autorizada pelo `item_id`. Use quando o usuário acabou de pagar, transferir ou receber algo e quer consultar dados novos. Ela envia um body vazio à Pluggy, não envia credenciais ou MFA e nunca atualiza todas as conexões de uma vez. Com `wait_for_completion: true`, consulta o estado até três vezes, em intervalos de dois segundos.
-
-`financeiro_refresh_status` mostra o estado atual da sincronização. Quando retornar `UPDATED`, chame `financeiro_query` novamente: o refresh invalida o snapshot em memória de 15 minutos, então a consulta coleta dados novos.
-
-Cada linha de `accounts` também informa a origem Pluggy: `item_id`, `connector_id`, `connector_name` e, quando a API disponibiliza, `institution_name`. Contas e cartões da mesma conexão compartilham o mesmo `item_id`. O projeto não tenta deduzir a instituição por descrição de transação; se a Pluggy não enviar o nome da instituição, o campo vem como `NULL`.
+### Exemplo de consultas
 
 ```sql
+-- Últimas 50 transações de todas as contas
 SELECT merchant_name, description, amount, date, account_name
 FROM transactions
-WHERE date >= '2026-01-01'
 ORDER BY date DESC
 LIMIT 50
-```
 
-O servidor bloqueia comandos que escrevem ou alteram o banco de consulta.
+-- Gastos por categoria nos últimos 90 days
+SELECT category, SUM(amount) as total
+FROM transactions
+WHERE date >= '2026-01-01'
+GROUP BY category
+ORDER BY total DESC
 
-Exemplo de sequência:
-
-```text
-financeiro_refresh_item({ item_id: "...", wait_for_completion: true })
-financeiro_refresh_status({ item_id: "..." })
-financeiro_query({ sql: "SELECT * FROM accounts", from: "2026-01-01", to: "2026-01-31" })
+-- Saldo consolidado por conta
+SELECT account_name, currency_code, current_balance
+FROM accounts
+WHERE type = 'BANK'
 ```
 
 ## Segurança
 
-Não coloque `clientSecret`, `itemId`, extrato ou token em commit, issue ou chat público. Use `.env` no computador, secrets do seu deploy ou um cofre de segredos. Este repositório tem somente valores de exemplo.
+- **Nunca** coloque `clientSecret` ou `itemId` em commit, issue ou chat
+- Use `.env` local ou secrets do seu deploy
+- Servidor bloqueia qualquer comando que escreva ou altere dados
+- Read-only por padrão — o agente consulta, nunca movimenta
 
 ## Desenvolvimento
 
@@ -128,4 +136,4 @@ npm run build
 
 ## Licença
 
-[MIT](LICENSE).
+[MIT](LICENSE)
