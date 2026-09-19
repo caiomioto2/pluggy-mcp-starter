@@ -35,7 +35,7 @@ Este projeto:
 
 ## Antes de instalar
 
-Conecte cada banco e cartão no [Meu Pluggy](https://app.pluggy.ai/). Cada conexão gera um `itemId`:
+Conecte cada banco e cartão no [Meu Pluggy](https://meu.pluggy.ai/). Cada conexão gera um `itemId`:
 
 ```env
 PLUGGY_ITEM_IDS=item-id-santander,item-id-nubank,item-id-itau
