@@ -85,13 +85,13 @@ test('existing account queries continue to work with added columns',async()=>{
 test('MCP expõe as ferramentas financeiras sem credenciais',async()=>{
  const client=new Client({name:'test',version:'1'});
  const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{},stderr:'pipe'});
- try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+ try{await client.connect(transport);const tools=(await client.listTools()).tools;assert.deepEqual(tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);assert.match(tools.find(t=>t.name==='financeiro_refresh_item').description,/Não use em loops, agendamentos ou tentativas repetidas/);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
 });
 const itemId='11111111-1111-4111-8111-111111111111';
 test('authorized refresh sends one empty PATCH and invalidates cache',async()=>{
  const calls=[];let invalidated=0;
  const result=await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>invalidated++,request:async(path,init)=>{calls.push({path,init});return {status:'UPDATING'};}});
- assert.equal(result.refresh_requested,true);assert.equal(invalidated,1);assert.deepEqual(calls,[{path:'/items/'+itemId,init:{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'}}]);
+ assert.equal(result.refresh_requested,true);assert.match(result.usage_warning,/Não repita, agende ou execute em lote/);assert.equal(invalidated,1);assert.deepEqual(calls,[{path:'/items/'+itemId,init:{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'}}]);
 });
 test('unconfigured Item never reaches the Pluggy API',async()=>{
  let calls=0;const result=await refreshItem({itemId,allowedItemIds:[],invalidateCache:()=>{},request:async()=>{calls++;return {};}});

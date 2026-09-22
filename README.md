@@ -95,8 +95,10 @@ Para OpenAI Secure MCP Tunnel, veja: [docs/03-openai-secure-mcp-tunnel.md](docs/
 | `financeiro_schema` | Lista tabelas (`accounts`, `transactions`) e exemplos de SQL |
 | `financeiro_query` | Executa `SELECT` nas tabelas financeiras (read-only) |
 | `financeiro_cartoes` | Lista cartões, faturas, parcelas e a semântica documentada de `PENDING`/`POSTED`, sem inferir campos ausentes |
-| `financeiro_refresh_item` | Solicita sincronização de uma conexão específica |
+| `financeiro_refresh_item` | Solicita uma única sincronização de uma conexão específica, após mudança real e recente |
 | `financeiro_refresh_status` | Mostra estado da sincronização |
+
+> **Uso responsável do refresh:** use `financeiro_refresh_item` apenas após uma alteração real e recente. Não o use em loop, agendamento ou lote. A Pluggy reserva `PATCH /items/{id}` para atualizações disparadas pelo usuário; a sincronização de rotina é feita pelo auto-sync.
 
 ### Exemplo de consultas
 

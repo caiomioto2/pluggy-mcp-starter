@@ -167,7 +167,7 @@ export function createFinanceServer() {
   const itemId = z.string().uuid();
   server.registerTool("financeiro_refresh_item", {
     title: "Atualizar uma conexão financeira",
-    description: "Solicita sincronização em tempo real de um único Item Pluggy autorizado. Use após pagamento, transferência, recebimento ou outra alteração recente. Nunca envia credenciais ou MFA. wait_for_completion consulta o estado no máximo três vezes e nunca repete o refresh.",
+    description: "Solicita uma única sincronização em tempo real de um Item Pluggy autorizado. Use somente após uma alteração real e recente, como pagamento, transferência ou recebimento. Não use em loops, agendamentos ou tentativas repetidas: a Pluggy reserva esta atualização para ações disparadas pelo usuário e usa a sincronização automática na rotina. Nunca envia credenciais ou MFA. wait_for_completion consulta o estado no máximo três vezes, sem fazer novo refresh.",
     inputSchema: z.object({ item_id:itemId, wait_for_completion:z.boolean().optional().default(false) }).strict(),
     annotations: { readOnlyHint:false, destructiveHint:false, idempotentHint:false, openWorldHint:true },
   }, async ({item_id,wait_for_completion}) => result(await refreshItem({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>{ cache.invalidate(); cardsCache.invalidate(); },waitForCompletion:wait_for_completion})));
