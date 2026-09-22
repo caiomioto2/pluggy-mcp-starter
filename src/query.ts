@@ -15,6 +15,7 @@ export const schema = {
  "Débitos brutos incluem transferências e pagamentos de fatura. Não some banco e cartão como despesa consolidada sem conciliação.",
  "Estornos/créditos ficam disponíveis, mas não são conciliados automaticamente.",
  "PENDING não foi contabilizado; filtre POSTED quando quiser somente lançamentos efetivados.",
+ "Em contas CREDIT, saldo_centavos é uso atual do cartão retornado pela Pluggy; não é gasto do período nem valor de fatura. Nunca o use sozinho para responder gastos ou faturas mensais: use financeiro_cartoes ou transações filtradas por data e status.",
  "Consulte contas para listar todas as contas retornadas pelas conexões Pluggy configuradas, inclusive as que não tiveram transações no período.",
  "Cache apenas em memória por 15 minutos por período; não garante histórico bancário integral."],
  example:"SELECT institution_name,connector_name,item_id,conta_id,nome,identificador_mascarado,tipo_conta FROM contas ORDER BY institution_name,item_id,tipo_conta,nome"

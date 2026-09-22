@@ -55,6 +55,8 @@ Run the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunne
 - `financeiro_refresh_item` requests one sync for one authorized `item_id`. Use it only after a real, recent change such as a payment, transfer, or income. Do not call it in a loop, schedule, or batch: Pluggy reserves this update for user-triggered actions and uses auto-sync for routine synchronization. It sends an empty body to Pluggy, never sends credentials or MFA, and never refreshes every connection at once. With `wait_for_completion: true`, it polls at most three times at two-second intervals without issuing another refresh.
 - `financeiro_refresh_status` reads the current sync state. When it returns `UPDATED`, call `financeiro_query` again: refresh invalidates the 15-minute in-memory snapshot, so the query collects fresh data.
 
+For “how much will I have to pay in card bills next month?”, use `financeiro_cartoes.faturas_a_vencer_no_periodo.total_por_moeda`. It adds the `totalAmount` of Credit Card Bills whose due date falls within the requested period. Treat it as a real total only when `coverage.complete` is `true`; `saldo_centavos` is current card usage, not a bill.
+
 Every `accounts` row also keeps its Pluggy origin: `item_id`, `connector_id`, `connector_name`, and, when Pluggy returns it, `institution_name`. Accounts and cards from the same connection share an `item_id`. The project never infers an institution from transaction descriptions; when Pluggy does not provide it, the field is `NULL`.
 
 Example sequence:

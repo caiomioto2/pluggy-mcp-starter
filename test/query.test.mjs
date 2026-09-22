@@ -85,7 +85,7 @@ test('existing account queries continue to work with added columns',async()=>{
 test('MCP expõe as ferramentas financeiras sem credenciais',async()=>{
  const client=new Client({name:'test',version:'1'});
  const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{},stderr:'pipe'});
- try{await client.connect(transport);const tools=(await client.listTools()).tools;assert.deepEqual(tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);assert.match(tools.find(t=>t.name==='financeiro_refresh_item').description,/Não use em loops, agendamentos ou tentativas repetidas/);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+ try{await client.connect(transport);const tools=(await client.listTools()).tools;assert.deepEqual(tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);assert.match(tools.find(t=>t.name==='financeiro_refresh_item').description,/Não use em loops, agendamentos ou tentativas repetidas/);assert.match(tools.find(t=>t.name==='financeiro_query').description,/saldo_centavos é o uso atual/);assert.match(tools.find(t=>t.name==='financeiro_cartoes').description,/faturas_a_vencer_no_periodo/);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
 });
 const itemId='11111111-1111-4111-8111-111111111111';
 test('authorized refresh sends one empty PATCH and invalidates cache',async()=>{
@@ -122,16 +122,20 @@ test('query cache does not retain a snapshot after refresh',async()=>{
  assert.equal((await cache.get('period',900000,async()=>({version:++loads}))).value.version,2);
 });
 test('cartões expõe faturas, parcelas e semântica sem inferir créditos',async()=>{
+ const paths=[];
  const req=async path=>{
+  paths.push(path);
   if(path.includes('/accounts?itemId=item-card'))return {results:[{id:'card-8603',itemId:'item-card',type:'CREDIT',subtype:'CREDIT_CARD',number:'***8603',name:'Santander Elite'}]};
-  if(path==='/bills?accountId=card-8603')return {results:[{id:'bill-1',accountId:'card-8603',dueDate:'2026-09-10T00:00:00Z',billClosingDate:'2026-09-03T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL',minimumPaymentAmount:500,allowsInstallments:true,payments:[]}]};
+  if(path==='/bills?accountId=card-8603')return {results:[{id:'bill-old',accountId:'card-8603',dueDate:'2026-08-10T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL'},{id:'bill-1',accountId:'card-8603',dueDate:'2026-09-10T00:00:00Z',billClosingDate:'2026-09-03T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL',minimumPaymentAmount:500,allowsInstallments:true,payments:[]}]};
   if(path==='/bills/bill-1/transactions')return {results:[{...tx('posted-purchase',100,'DEBIT'),accountId:'card-8603',creditCardMetadata:{installmentNumber:2,totalInstallments:6,totalAmount:600,billId:'bill-1'}}]};
   if(path.startsWith('/v2/transactions?'))return {results:[{...tx('pending-credit',-7945.44,'CREDIT'),accountId:'card-8603',status:'PENDING'}],next:null};
   throw new Error('unexpected path '+path);
  };
  const result=await collectCards(req,['item-card'],'2026-09-01','2026-09-30');
  assert.deepEqual(result.cards,[{account_id:'card-8603',item_id:'item-card',name:'Santander Elite',last4:'8603'}]);
- assert.equal(result.bills[0].billId,'bill-1');
+ const dueBill=result.bills.find(bill=>bill.billId==='bill-1');
+ assert.ok(dueBill);
+ assert.deepEqual(result.faturas_a_vencer_no_periodo,{bills:[dueBill],total_por_moeda:[{currency:'BRL',total_amount_centavos:1000000,bills_count:1}],coverage:{complete:true,cards_with_bills:1,cards_without_bills:0,source:'Pluggy Credit Card Bills totalAmount'}});
  const pending=result.transactions.find(transaction=>transaction.id==='pending-credit');
  assert.deepEqual(pending,{id:'pending-credit',account_id:'card-8603',amount_centavos:-794544,currency:'BRL',raw_status:'PENDING',billId:null,transaction_role:'unknown',semantic_status:'open_bill',installment_number:null,total_installments:null,total_amount_centavos:null,installment_group_id:null,provenance:{billId:'unavailable',transaction_role:'derived',semantic_status:'provider',installment:'unavailable'},confidence:{transaction_role:'low',semantic_status:'high',installment:'low'}});
  const posted=result.transactions.find(transaction=>transaction.id==='posted-purchase');
@@ -139,4 +143,17 @@ test('cartões expõe faturas, parcelas e semântica sem inferir créditos',asyn
  assert.equal(posted.transaction_role,'purchase');
  assert.deepEqual(posted.provenance,{billId:'provider',transaction_role:'provider',semantic_status:'provider',installment:'provider'});
  assert.equal(posted.installment_group_id,null);
+ assert.equal(paths.includes('/bills/bill-old/transactions'),false);
+ assert.equal(result.coverage.partial,false);
+});
+test('cartões devolve resultado parcial quando um cartão não disponibiliza bills',async()=>{
+ const req=async path=>{
+  if(path.includes('/accounts?itemId=item-card'))return {results:[{id:'card-ok',itemId:'item-card',type:'CREDIT',number:'***8603'},{id:'card-without-bills',itemId:'item-card',type:'CREDIT',number:'***1234'}]};
+  if(path.startsWith('/v2/transactions?'))return {results:[],next:null};
+  if(path==='/bills?accountId=card-ok')return {results:[]};
+  if(path==='/bills?accountId=card-without-bills')throw new Error('not supported');
+  throw new Error('unexpected path '+path);
+ };
+ const result=await collectCards(req,['item-card'],'2026-09-01','2026-09-30');
+ assert.equal(result.cards.length,2);assert.equal(result.coverage.partial,true);assert.equal(result.faturas_a_vencer_no_periodo.coverage.complete,false);assert.equal(result.faturas_a_vencer_no_periodo.coverage.cards_without_bills,1);assert.match(result.warnings[0],/não disponibilizou Credit Card Bills/);
 });

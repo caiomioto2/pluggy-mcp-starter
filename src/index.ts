@@ -13,6 +13,10 @@ import { collectCards } from "./cards.js";
 const API_URL = "https://api.pluggy.ai";
 const PAGE_SIZE = 500;
 const MAX_TRANSACTIONS = 10_000;
+const API_KEY_TTL_MS = 105 * 60 * 1000;
+
+let cachedApiKey: { value: string; expiresAt: number } | undefined;
+let pendingApiKey: Promise<string> | undefined;
 
 type JsonObject = Record<string, unknown>;
 
@@ -65,38 +69,53 @@ export function configuredItemIds(environment: NodeJS.ProcessEnv = process.env):
 }
 
 async function pluggyRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const clientId = requiredEnvironment("PLUGGY_CLIENT_ID");
-  const clientSecret = requiredEnvironment("PLUGGY_CLIENT_SECRET");
-  const authResponse = await fetch(`${API_URL}/auth`, {
-    signal: AbortSignal.timeout(20000),
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ clientId, clientSecret }),
-  });
-
-  if (!authResponse.ok) {
-    throw await toPluggyError(authResponse, "autenticar na Pluggy");
-  }
-
-  const authPayload: unknown = await authResponse.json();
-  if (!isObject(authPayload) || typeof authPayload.apiKey !== "string") {
-    throw new Error("A Pluggy não retornou uma API key válida.");
-  }
-
+  const apiKey = await pluggyApiKey();
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     signal: AbortSignal.timeout(20000),
     headers: {
       Accept: "application/json",
       ...(init?.headers ?? {}),
-      "X-API-KEY": authPayload.apiKey,
+      "X-API-KEY": apiKey,
     },
   });
 
   if (!response.ok) {
+    if (response.status === 401) cachedApiKey = undefined;
     throw await toPluggyError(response, path);
   }
   return (await response.json()) as T;
+}
+
+async function pluggyApiKey(): Promise<string> {
+  if (cachedApiKey && cachedApiKey.expiresAt > Date.now()) return cachedApiKey.value;
+  if (pendingApiKey) return pendingApiKey;
+  pendingApiKey = (async () => {
+    const clientId = requiredEnvironment("PLUGGY_CLIENT_ID");
+    const clientSecret = requiredEnvironment("PLUGGY_CLIENT_SECRET");
+    const authResponse = await fetch(`${API_URL}/auth`, {
+      signal: AbortSignal.timeout(20000),
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ clientId, clientSecret }),
+    });
+
+    if (!authResponse.ok) {
+      throw await toPluggyError(authResponse, "autenticar na Pluggy");
+    }
+
+    const authPayload: unknown = await authResponse.json();
+    if (!isObject(authPayload) || typeof authPayload.apiKey !== "string") {
+      throw new Error("A Pluggy não retornou uma API key válida.");
+    }
+    cachedApiKey = { value: authPayload.apiKey, expiresAt: Date.now() + API_KEY_TTL_MS };
+    return cachedApiKey.value;
+  })();
+  try {
+    return await pendingApiKey;
+  } finally {
+    pendingApiKey = undefined;
+  }
 }
 
 async function toPluggyError(response: Response, operation: string): Promise<PluggyHttpError> {
@@ -139,7 +158,7 @@ export function createFinanceServer() {
   const date = z.string().refine(s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0,10) === s, "Data inválida YYYY-MM-DD");
   server.registerTool("financeiro_query", {
     title: "Consultar contas e transações com SQL",
-    description: "SELECT SQLite somente leitura sobre contas e transações no período UTC informado. contas inclui cada conta de cada conexão Pluggy configurada, inclusive sem transações. Reutiliza a coleta em memória por 15 minutos; um refresh invalida esse snapshot, então consulte novamente após o Item concluir. Consulte financeiro_schema antes de calcular totais.",
+    description: "SELECT SQLite somente leitura sobre contas e transações no período UTC informado. Em contas CREDIT, saldo_centavos é o uso atual retornado pela Pluggy: não é gasto do período nem valor de fatura. Para faturas, use financeiro_cartoes. contas inclui cada conta de cada conexão Pluggy configurada, inclusive sem transações. Reutiliza a coleta em memória por 15 minutos; um refresh invalida esse snapshot, então consulte novamente após o Item concluir. Consulte financeiro_schema antes de calcular totais.",
     inputSchema: z.object({ sql: z.string().min(1).max(8000), from: date, to: date, limit: z.number().int().min(1).max(200).default(100) }).strict(),
     annotations,
   }, async ({sql, from, to, limit}) => {
@@ -153,7 +172,7 @@ export function createFinanceServer() {
   });
   server.registerTool("financeiro_cartoes", {
     title: "Consultar cartões, faturas e parcelas",
-    description: "Retorna cartões de crédito, Credit Card Bills e transações com status bruto da Pluggy, billId, parcelas, provenance e confidence. PENDING significa fatura aberta na Pluggy; créditos sem evidência adicional permanecem unknown, sem inferir pagamento ou estorno.",
+    description: "Retorna cartões de crédito, Credit Card Bills e transações com status bruto da Pluggy, billId, parcelas, provenance e confidence. faturas_a_vencer_no_periodo soma os totalAmount das Bills com vencimento no período pedido: é a fonte para responder quanto há de faturas a pagar no próximo mês, conforme a fotografia atual da Pluggy. Quando uma instituição não fornece Bills, coverage.complete fica false e o valor parcial não deve ser tratado como total real. Para o período solicitado, busca lançamentos detalhados somente nas faturas que vencem nesse período. PENDING significa fatura aberta na Pluggy; créditos sem evidência adicional permanecem unknown, sem inferir pagamento ou estorno.",
     inputSchema: z.object({ from: date, to: date }).strict(),
     annotations,
   }, async ({ from, to }) => {

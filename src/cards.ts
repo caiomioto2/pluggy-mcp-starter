@@ -49,20 +49,26 @@ type Request = <T>(path: string) => Promise<T>;
 
 type Provenance = "provider" | "derived" | "unavailable";
 type Confidence = "high" | "medium" | "low";
+type NormalizedBill = {
+  billId: string;
+  account_id: string;
+  due_date: string | null;
+  closing_date: string | null;
+  total_amount_centavos: number;
+  currency: string;
+  minimum_payment_amount_centavos: number | null;
+  allows_installments: boolean | null;
+  payments: unknown[];
+};
 
 export type CardSnapshot = {
   cards: Array<{ account_id: string; item_id: string; name: string | null; last4: string | null }>;
-  bills: Array<{
-    billId: string;
-    account_id: string;
-    due_date: string | null;
-    closing_date: string | null;
-    total_amount_centavos: number;
-    currency: string;
-    minimum_payment_amount_centavos: number | null;
-    allows_installments: boolean | null;
-    payments: unknown[];
-  }>;
+  bills: NormalizedBill[];
+  faturas_a_vencer_no_periodo: {
+    bills: NormalizedBill[];
+    total_por_moeda: Array<{ currency: string; total_amount_centavos: number; bills_count: number }>;
+    coverage: { complete: boolean; cards_with_bills: number; cards_without_bills: number; source: "Pluggy Credit Card Bills totalAmount" };
+  };
   transactions: Array<{
     id: string;
     account_id: string;
@@ -79,7 +85,8 @@ export type CardSnapshot = {
     provenance: { billId: Provenance; transaction_role: Provenance; semantic_status: Provenance; installment: Provenance };
     confidence: { transaction_role: Confidence; semantic_status: Confidence; installment: Confidence };
   }>;
-  coverage: { connections: number; cards: number; bills: number; transactions: number; scope: string };
+  coverage: { connections: number; cards: number; bills: number; transactions: number; scope: string; partial: boolean };
+  warnings: string[];
 };
 
 function cents(value: number): number { return Math.round(value * 100); }
@@ -88,7 +95,7 @@ function last4(number: string | null | undefined): string | null {
   return number?.match(/(\d{4})\D*$/)?.[1] ?? null;
 }
 
-function normalizeBill(bill: Bill): CardSnapshot["bills"][number] {
+function normalizeBill(bill: Bill): NormalizedBill {
   return {
     billId: bill.id,
     account_id: bill.accountId,
@@ -166,6 +173,29 @@ async function listBillTransactions(request: Request, billId: string): Promise<T
   return payload.results;
 }
 
+function dateKey(value: string | null | undefined): string | null {
+  const date = value?.slice(0, 10);
+  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+}
+
+function billIsDueInPeriod(bill: Bill, from: string, to: string): boolean {
+  const dueDate = dateKey(bill.dueDate);
+  return dueDate !== null && dueDate >= from && dueDate <= to;
+}
+
+async function mapWithConcurrency<T, R>(values: readonly T[], limit: number, operation: (value: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= values.length) return;
+      results[index] = await operation(values[index]);
+    }
+  }));
+  return results;
+}
+
 /**
  * Preserva o dado do provedor e só dá uma semântica quando a documentação da
  * Pluggy a garante. Créditos continuam unknown: não há evidência suficiente
@@ -180,19 +210,52 @@ export async function collectCards(request: Request, itemIds: string[], from: st
 
   const bills: Bill[] = [];
   const transactions = new Map<string, Transaction>();
-  for (const { account } of cards) {
-    for (const transaction of await listCurrentTransactions(request, account.id, from, to)) transactions.set(transaction.id, transaction);
-    const accountBills = await listBills(request, account.id);
-    bills.push(...accountBills);
-    for (const bill of accountBills) {
-      for (const transaction of await listBillTransactions(request, bill.id)) transactions.set(transaction.id, transaction);
-    }
+  const cardResults = await mapWithConcurrency(cards, 3, async ({ account }) => {
+    const warnings: string[] = [];
+    const currentTransactions = await listCurrentTransactions(request, account.id, from, to).catch(() => {
+      warnings.push(`A Pluggy não disponibilizou transações recentes para o cartão ${last4(account.number) ?? account.id}.`);
+      return [] as Transaction[];
+    });
+    let billsAvailable = true;
+    const accountBills = await listBills(request, account.id).catch(() => {
+      billsAvailable = false;
+      warnings.push(`A Pluggy não disponibilizou Credit Card Bills para o cartão ${last4(account.number) ?? account.id}.`);
+      return [] as Bill[];
+    });
+    const billTransactions = await Promise.all(accountBills.filter(bill => billIsDueInPeriod(bill, from, to)).map(async bill =>
+      listBillTransactions(request, bill.id).catch(() => {
+        warnings.push(`A Pluggy não disponibilizou os lançamentos da fatura ${bill.id}.`);
+        return [] as Transaction[];
+      }),
+    ));
+    return { accountBills, billsAvailable, transactions: [...currentTransactions, ...billTransactions.flat()], warnings };
+  });
+  const warnings = cardResults.flatMap(result => result.warnings);
+  for (const result of cardResults) {
+    bills.push(...result.accountBills);
+    for (const transaction of result.transactions) transactions.set(transaction.id, transaction);
   }
+  const normalizedBills = bills.map(normalizeBill);
+  const billsDueInPeriod = normalizedBills.filter(bill => bill.due_date !== null && bill.due_date.slice(0, 10) >= from && bill.due_date.slice(0, 10) <= to);
+  const totalsByCurrency = new Map<string, { currency: string; total_amount_centavos: number; bills_count: number }>();
+  for (const bill of billsDueInPeriod) {
+    const total = totalsByCurrency.get(bill.currency) ?? { currency: bill.currency, total_amount_centavos: 0, bills_count: 0 };
+    total.total_amount_centavos += bill.total_amount_centavos;
+    total.bills_count += 1;
+    totalsByCurrency.set(bill.currency, total);
+  }
+  const cardsWithoutBills = cardResults.filter(result => !result.billsAvailable).length;
 
   return {
     cards: cards.map(({ account, itemId }) => ({ account_id: account.id, item_id: account.itemId ?? itemId, name: account.name ?? null, last4: last4(account.number) })),
-    bills: bills.map(normalizeBill),
+    bills: normalizedBills,
+    faturas_a_vencer_no_periodo: {
+      bills: billsDueInPeriod,
+      total_por_moeda: [...totalsByCurrency.values()],
+      coverage: { complete: cardsWithoutBills === 0, cards_with_bills: cards.length - cardsWithoutBills, cards_without_bills: cardsWithoutBills, source: "Pluggy Credit Card Bills totalAmount" },
+    },
     transactions: [...transactions.values()].map(normalizeTransaction),
-    coverage: { connections: itemIds.length, cards: cards.length, bills: bills.length, transactions: transactions.size, scope: "Cartões e faturas disponibilizados pela Pluggy; campos ausentes não são inferidos." },
+    coverage: { connections: itemIds.length, cards: cards.length, bills: bills.length, transactions: transactions.size, partial: warnings.length > 0, scope: "Cartões e faturas disponibilizados pela Pluggy; campos ausentes não são inferidos. Lançamentos detalhados de fatura são buscados somente para faturas com vencimento no período solicitado." },
+    warnings,
   };
 }
