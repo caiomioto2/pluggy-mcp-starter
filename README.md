@@ -100,7 +100,11 @@ Para OpenAI Secure MCP Tunnel, veja: [docs/03-openai-secure-mcp-tunnel.md](docs/
 
 > **Uso responsável do refresh:** use `financeiro_refresh_item` apenas após uma alteração real e recente. Não o use em loop, agendamento ou lote. A Pluggy reserva `PATCH /items/{id}` para atualizações disparadas pelo usuário; a sincronização de rotina é feita pelo auto-sync.
 
-Para responder “quanto tenho de faturas para pagar no próximo mês?”, use `faturas_a_vencer_no_periodo.total_por_moeda` de `financeiro_cartoes`. Ele soma `totalAmount` das Credit Card Bills cujo vencimento cai no período solicitado. Só trate o resultado como total real quando `coverage.complete` for `true`; `saldo_centavos` é uso atual do cartão, não fatura.
+Para responder “quanto tenho de faturas para pagar no próximo mês?”, use `faturas_a_vencer_no_periodo.total_por_moeda` de `financeiro_cartoes`. Ele soma `totalAmount` das Credit Card Bills cujo vencimento cai no período solicitado. Só trate o resultado como total real quando `coverage.complete` for `true`; `saldo_centavos` é uso atual do cartão, não fatura. `bill_coverage_by_card` separa fatura encontrada, nenhuma fatura retornada e falha de API. Uma lista vazia não prova que o conector suporta Bills nem que não há fatura.
+
+`financeiro_cartoes` separa `metrics.card_spending`, `metrics.bills_due` e `metrics.bill_payments`. `provider_status` preserva `PENDING`/`POSTED`; `financial_state` esclarece quando a evidência permite distinguir compra aberta, parcela ligada a uma fatura e parcela sem ciclo conhecido (`installment_unassigned`). Número de parcela sem vínculo de fatura não basta para chamá-la de futura. Datas de transação não são datas de vencimento por padrão; sem `bill_id`/`expected_bill_id`, ciclo ou vencimento fornecido, esses campos ficam vazios. `next_bill_estimate` contém apenas um subtotal cauteloso de compras abertas observadas, exclui parcelas futuras e sem ciclo conhecido e mantém `projected_total_by_currency` nulo quando não há evidência para projetar o total. Pares de pagamento por valor, moeda e data aparecem como candidatos (`candidate_card_pending`/`candidate_card_posted`), não confirmam quitação; `PENDING` no cartão continua pendente.
+
+`current_bill.paid_amount_centavos` e `remaining_amount_centavos` permanecem nulos quando a coleta não consegue confirmar quitação. A Pluggy determina a liquidação comparando os pagamentos e encargos da fatura seguinte com o total da fatura anterior; um lançamento de pagamento `POSTED` sozinho não prova que o saldo inteiro foi pago.
 
 ### Exemplo de consultas
 

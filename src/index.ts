@@ -150,7 +150,7 @@ export function createFinanceServer() {
   const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
   const result = (value: Record<string, unknown>) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], structuredContent: value });
   server.registerTool("financeiro_schema", {
-    title: "Estrutura das finanças", description: "Campos SQL, semântica e limitações das transações. Não consulta segredos.",
+    title: "Estrutura das finanças", description: "Campos SQL, semântica e limitações das transações e cartões. PENDING é o status bruto do provedor e pode indicar compra aberta, parcela futura ou pagamento; consulte financeiro_cartoes para financial_state, bills e cobertura. Datas de parcelas não são datas de vencimento sem billId ou campo explícito. Não consulta segredos.",
     inputSchema: z.object({}).strict(), annotations,
   }, async () => result(schema));
   const cache = new TimedSnapshotCache<Awaited<ReturnType<typeof collectMany>>>();
@@ -172,7 +172,7 @@ export function createFinanceServer() {
   });
   server.registerTool("financeiro_cartoes", {
     title: "Consultar cartões, faturas e parcelas",
-    description: "Retorna cartões de crédito, Credit Card Bills e transações com status bruto da Pluggy, billId, parcelas, provenance e confidence. faturas_a_vencer_no_periodo soma os totalAmount das Bills com vencimento no período pedido: é a fonte para responder quanto há de faturas a pagar no próximo mês, conforme a fotografia atual da Pluggy. Quando uma instituição não fornece Bills, coverage.complete fica false e o valor parcial não deve ser tratado como total real. Para o período solicitado, busca lançamentos detalhados somente nas faturas que vencem nesse período. PENDING significa fatura aberta na Pluggy; créditos sem evidência adicional permanecem unknown, sem inferir pagamento ou estorno.",
+    description: "Retorna cartões, Bills, transações, parcelas e métricas separadas de gastos no cartão, total das faturas e pagamentos de fatura. Expõe provider_status/raw_status, financial_state, provider_type, normalized_role, bill_id, datas e proveniência/confiança. PENDING é ambíguo: pode ser compra aberta, parcela futura ou pagamento pendente; não o some como se tudo pertencesse à fatura atual. Parcelas sem vínculo explícito de ciclo ficam installment_unassigned. Faturas a vencer são calculadas somente de Bills retornadas pela Pluggy. bill_coverage_by_card diferencia resposta vazia, erro e faturas fora do período; Bills vazio mantém cobertura incompleta. next_bill_estimate e o subtotal em cards[].next_bill são compras abertas observadas sem atribuição a Bill, nunca o total projetado; parcelas sem vínculo ficam excluídas e listadas separadamente. Sem billId/data de vencimento/ciclo fornecido, valores e parcelas não são atribuídos à próxima fatura. Pagamentos bancários e no cartão ficam em métricas separadas; pares por valor, moeda e data são candidatos heurísticos, não confirmação de quitação; status candidate_* não indicam que a fatura foi paga. Datas dos lançamentos são as datas da transação do provedor; em parcelas seu significado é desconhecido sem metadados. Campos de ciclo ausentes permanecem NULL.",
     inputSchema: z.object({ from: date, to: date }).strict(),
     annotations,
   }, async ({ from, to }) => {

@@ -85,7 +85,7 @@ test('existing account queries continue to work with added columns',async()=>{
 test('MCP expõe as ferramentas financeiras sem credenciais',async()=>{
  const client=new Client({name:'test',version:'1'});
  const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{},stderr:'pipe'});
- try{await client.connect(transport);const tools=(await client.listTools()).tools;assert.deepEqual(tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);assert.match(tools.find(t=>t.name==='financeiro_refresh_item').description,/Não use em loops, agendamentos ou tentativas repetidas/);assert.match(tools.find(t=>t.name==='financeiro_query').description,/saldo_centavos é o uso atual/);assert.match(tools.find(t=>t.name==='financeiro_cartoes').description,/faturas_a_vencer_no_periodo/);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+ try{await client.connect(transport);const tools=(await client.listTools()).tools;assert.deepEqual(tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);assert.match(tools.find(t=>t.name==='financeiro_refresh_item').description,/Não use em loops, agendamentos ou tentativas repetidas/);assert.match(tools.find(t=>t.name==='financeiro_query').description,/saldo_centavos é o uso atual/);assert.match(tools.find(t=>t.name==='financeiro_cartoes').description,/next_bill_estimate/);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);assert.ok(r.structuredContent.cards.fields.provider_status);}finally{await client.close();}
 });
 const itemId='11111111-1111-4111-8111-111111111111';
 test('authorized refresh sends one empty PATCH and invalidates cache',async()=>{
@@ -127,22 +127,24 @@ test('cartões expõe faturas, parcelas e semântica sem inferir créditos',asyn
   paths.push(path);
   if(path.includes('/accounts?itemId=item-card'))return {results:[{id:'card-8603',itemId:'item-card',type:'CREDIT',subtype:'CREDIT_CARD',number:'***8603',name:'Santander Elite'}]};
   if(path==='/bills?accountId=card-8603')return {results:[{id:'bill-old',accountId:'card-8603',dueDate:'2026-08-10T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL'},{id:'bill-1',accountId:'card-8603',dueDate:'2026-09-10T00:00:00Z',billClosingDate:'2026-09-03T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL',minimumPaymentAmount:500,allowsInstallments:true,payments:[]}]};
-  if(path==='/bills/bill-1/transactions')return {results:[{...tx('posted-purchase',100,'DEBIT'),accountId:'card-8603',creditCardMetadata:{installmentNumber:2,totalInstallments:6,totalAmount:600,billId:'bill-1'}}]};
+  if(path==='/bills/bill-1/transactions')return {results:[{...tx('posted-purchase',100,'DEBIT'),accountId:'card-8603',date:'2026-08-22T12:00:00Z',creditCardMetadata:{installmentNumber:2,totalInstallments:6,totalAmount:600,billId:'bill-1'}}]};
   if(path.startsWith('/v2/transactions?'))return {results:[{...tx('pending-credit',-7945.44,'CREDIT'),accountId:'card-8603',status:'PENDING'}],next:null};
   throw new Error('unexpected path '+path);
  };
  const result=await collectCards(req,['item-card'],'2026-09-01','2026-09-30');
- assert.deepEqual(result.cards,[{account_id:'card-8603',item_id:'item-card',name:'Santander Elite',last4:'8603'}]);
+ assert.deepEqual(result.cards.map(({account_id,item_id,name,last4})=>({account_id,item_id,name,last4})),[{account_id:'card-8603',item_id:'item-card',name:'Santander Elite',last4:'8603'}]);
+ assert.equal(result.cards[0].current_bill.bill_id,'bill-1');assert.equal(result.cards[0].current_bill.paid_amount_centavos,null);assert.equal(result.cards[0].next_bill.projected_amount_centavos,null);
  const dueBill=result.bills.find(bill=>bill.billId==='bill-1');
  assert.ok(dueBill);
  assert.deepEqual(result.faturas_a_vencer_no_periodo,{bills:[dueBill],total_por_moeda:[{currency:'BRL',total_amount_centavos:1000000,bills_count:1}],coverage:{complete:true,cards_with_bills:1,cards_without_bills:0,source:'Pluggy Credit Card Bills totalAmount'}});
  const pending=result.transactions.find(transaction=>transaction.id==='pending-credit');
- assert.deepEqual(pending,{id:'pending-credit',account_id:'card-8603',amount_centavos:-794544,currency:'BRL',raw_status:'PENDING',billId:null,transaction_role:'unknown',semantic_status:'open_bill',installment_number:null,total_installments:null,total_amount_centavos:null,installment_group_id:null,provenance:{billId:'unavailable',transaction_role:'derived',semantic_status:'provider',installment:'unavailable'},confidence:{transaction_role:'low',semantic_status:'high',installment:'low'}});
+ assert.equal(pending.amount_centavos,-794544);assert.equal(pending.raw_status,'PENDING');assert.equal(pending.transaction_role,'unknown');assert.equal(pending.normalized_role,'unknown');assert.equal(pending.financial_state,'unknown');assert.equal(pending.semantic_status,'open_bill');assert.equal(pending.confidence.semantic_status,'medium');
  const posted=result.transactions.find(transaction=>transaction.id==='posted-purchase');
  assert.equal(posted.semantic_status,'due_bill');
  assert.equal(posted.transaction_role,'purchase');
- assert.deepEqual(posted.provenance,{billId:'provider',transaction_role:'provider',semantic_status:'provider',installment:'provider'});
+ assert.equal(posted.provenance.billId,'provider');assert.equal(posted.provenance.installment,'provider');assert.equal(posted.expected_bill_id,'bill-1');assert.equal(posted.expected_due_date,'2026-09-10T00:00:00Z');
  assert.equal(posted.installment_group_id,null);
+ assert.equal(result.metrics.card_spending.amount_by_currency.length,0);
  assert.equal(paths.includes('/bills/bill-old/transactions'),false);
  assert.equal(result.coverage.partial,false);
 });
@@ -155,5 +157,81 @@ test('cartões devolve resultado parcial quando um cartão não disponibiliza bi
   throw new Error('unexpected path '+path);
  };
  const result=await collectCards(req,['item-card'],'2026-09-01','2026-09-30');
- assert.equal(result.cards.length,2);assert.equal(result.coverage.partial,true);assert.equal(result.faturas_a_vencer_no_periodo.coverage.complete,false);assert.equal(result.faturas_a_vencer_no_periodo.coverage.cards_without_bills,1);assert.match(result.warnings[0],/não disponibilizou Credit Card Bills/);
+ assert.equal(result.cards.length,2);assert.equal(result.coverage.partial,true);assert.equal(result.faturas_a_vencer_no_periodo.coverage.complete,false);assert.equal(result.faturas_a_vencer_no_periodo.coverage.cards_without_bills,2);assert.ok(result.warnings.some(warning=>/não disponibilizou Credit Card Bills/.test(warning)));
+});
+
+test('cobertura distingue bills retornadas, resposta vazia e falha sem inventar suporte',async()=>{
+ const req=async path=>{
+  if(path.includes('/accounts?itemId=item-card'))return {results:[
+   {id:'card-with-bill',itemId:'item-card',type:'CREDIT',number:'***1111'},
+   {id:'card-empty',itemId:'item-card',type:'CREDIT',number:'***2222'},
+   {id:'card-error',itemId:'item-card',type:'CREDIT',number:'***3333'}
+  ]};
+  if(path.startsWith('/v2/transactions?')){
+   const accountId=new URL('https://pluggy.test'+path).searchParams.get('accountId');
+   if(accountId==='card-with-bill')return {results:[
+    {...tx('future-installment',120,'DEBIT'),accountId, status:'PENDING',date:'2026-10-10T00:00:00Z',description:'Hotel Garrafão 2/3',creditCardMetadata:{installmentNumber:2,totalInstallments:3,feeType:'OTHER'}},
+    {...tx('confirmed-future',120,'DEBIT'),accountId,status:'PENDING',date:'2026-10-10T00:00:00Z',description:'Hotel Garrafão 2/3',creditCardMetadata:{installmentNumber:2,totalInstallments:3,billId:'bill-later'}},
+    {...tx('open-purchase',80,'DEBIT'),accountId,status:'PENDING',date:'2026-10-12T00:00:00Z',description:'Mercado',creditCardMetadata:{feeType:null}}
+   ],next:null};
+   return {results:[],next:null};
+  }
+  if(path==='/bills?accountId=card-with-bill')return {results:[{id:'bill-later',accountId:'card-with-bill',dueDate:'2026-11-20T00:00:00Z',billClosingDate:'2026-11-10T00:00:00Z',totalAmount:200,totalAmountCurrencyCode:'BRL'}]};
+  if(path==='/bills?accountId=card-empty')return {results:[]};
+  if(path==='/bills?accountId=card-error')throw new Error('temporary unavailable');
+  throw new Error('unexpected path '+path);
+ };
+ const result=await collectCards(req,['item-card'],'2026-10-01','2026-10-31');
+ assert.deepEqual(result.faturas_a_vencer_no_periodo.coverage,{complete:false,cards_with_bills:1,cards_without_bills:2,source:'Pluggy Credit Card Bills totalAmount'});
+ assert.deepEqual(result.bill_coverage_by_card.map(({card_last4,bills_supported,bills_available,bills_found_total,bills_found_in_period,reason,last_sync_at})=>({card_last4,bills_supported,bills_available,bills_found_total,bills_found_in_period,reason,last_sync_at})),[
+  {card_last4:'1111',bills_supported:true,bills_available:true,bills_found_total:1,bills_found_in_period:0,reason:'bills_outside_period',last_sync_at:null},
+  {card_last4:'2222',bills_supported:null,bills_available:true,bills_found_total:0,bills_found_in_period:0,reason:'empty_response',last_sync_at:null},
+  {card_last4:'3333',bills_supported:null,bills_available:false,bills_found_total:0,bills_found_in_period:0,reason:'request_failed',last_sync_at:null}
+ ]);
+ const installment=result.transactions.find(transaction=>transaction.id==='future-installment');
+ assert.equal(installment.provider_fee_type,'OTHER');
+ assert.equal(installment.normalized_role,'purchase');
+ assert.equal(installment.financial_state,'installment_unassigned');
+ assert.equal(installment.expected_bill_id,null);
+ assert.equal(installment.expected_due_date,null);
+ assert.equal(installment.expected_bill_month,null);
+ assert.equal(installment.date_semantics,'provider_transaction_date_semantics_unknown');
+ assert.equal(installment.confidence.normalized_role,'low');assert.equal(installment.confidence.financial_state,'low');
+ const open=result.transactions.find(transaction=>transaction.id==='open-purchase');
+ assert.equal(open.financial_state,'open_bill_purchase');
+ assert.equal(open.normalized_role,'purchase');
+ const confirmedFuture=result.transactions.find(transaction=>transaction.id==='confirmed-future');
+ assert.equal(confirmedFuture.financial_state,'future_installment');assert.equal(confirmedFuture.expected_due_date,'2026-11-20T00:00:00Z');
+ assert.equal(result.cards[0].next_bill.bill_id,'bill-later');assert.deepEqual(result.cards[0].next_bill.confirmed_installment_ids,['confirmed-future']);assert.equal(result.cards[0].next_bill.open_purchase_amount_attribution,'unassigned_without_bill_link');
+ assert.deepEqual(result.next_bill_estimate.excluded_unassigned_installment_ids,['future-installment']);
+ assert.deepEqual(result.next_bill_estimate.excluded_future_installment_ids,['confirmed-future']);
+ assert.equal(result.next_bill_estimate.projected_total_by_currency,null);
+ assert.equal(result.metrics.card_spending.amount_by_currency[0].amount_centavos,8000);
+ assert.equal(result.metrics.bills_due.coverage_complete,false);
+});
+
+test('pagamento bancário e pagamento no cartão ficam separados e par pending não confirma quitação',async()=>{
+ const req=async path=>{
+  if(path.includes('/accounts?itemId=item-payments'))return {results:[
+   {id:'bank-1',itemId:'item-payments',type:'BANK',number:'***1000'},
+   {id:'card-1',itemId:'item-payments',type:'CREDIT',number:'***8603'}
+  ]};
+  if(path.startsWith('/v2/transactions?')){
+   const accountId=new URL('https://pluggy.test'+path).searchParams.get('accountId');
+   if(accountId==='bank-1')return {results:[{...tx('bank-payment',100,'DEBIT'),accountId,status:'POSTED',description:'PAGAMENTO CARTAO CREDITO'}],next:null};
+   if(accountId==='card-1')return {results:[{...tx('card-payment',-100,'CREDIT'),accountId,status:'PENDING',description:'PAGAMENTO DE FATURA'},{...tx('card-payment-2',-60,'CREDIT'),accountId,status:'PENDING',description:'PAGAMENTO DE FATURA'}],next:null};
+  }
+  if(path==='/bills?accountId=card-1')return {results:[]};
+  throw new Error('unexpected path '+path);
+ };
+ const result=await collectCards(req,['item-payments'],'2026-09-01','2026-09-30');
+ const payment=result.transactions[0];
+ assert.equal(payment.payment_reconciliation_status,'candidate_card_pending');
+ assert.equal(payment.payment_match_id,'payment:bank-payment:card-payment');assert.equal(payment.matched_card_transaction_id,'card-payment');
+ assert.equal(payment.payment_duplicate_signal,'multiple_pending_card_payments_same_day');
+ assert.equal(payment.matched_bank_transaction_id,'bank-payment');
+ assert.equal(payment.financial_state,'bill_payment_pending');
+ const unmatched=result.transactions.find(row=>row.id==='card-payment-2');assert.equal(unmatched.payment_reconciliation_status,'unmatched');assert.equal(unmatched.payment_duplicate_signal,'multiple_pending_card_payments_same_day');
+ assert.equal(result.metrics.bill_payments.card_side_amount_by_currency[0].amount_centavos,16000);
+ assert.equal(result.metrics.bill_payments.bank_side_posted_amount_by_currency[0].amount_centavos,10000);
 });
