@@ -182,7 +182,7 @@ test('cobertura distingue bills retornadas, resposta vazia e falha sem inventar 
   throw new Error('unexpected path '+path);
  };
  const result=await collectCards(req,['item-card'],'2026-10-01','2026-10-31');
- assert.deepEqual(result.faturas_a_vencer_no_periodo.coverage,{complete:false,cards_with_bills:1,cards_without_bills:2,source:'Pluggy Credit Card Bills totalAmount'});
+ assert.deepEqual(result.faturas_a_vencer_no_periodo.coverage,{complete:false,cards_with_bills:0,cards_without_bills:3,source:'Pluggy Credit Card Bills totalAmount'});
  assert.deepEqual(result.bill_coverage_by_card.map(({card_last4,bills_supported,bills_available,bills_found_total,bills_found_in_period,reason,last_sync_at})=>({card_last4,bills_supported,bills_available,bills_found_total,bills_found_in_period,reason,last_sync_at})),[
   {card_last4:'1111',bills_supported:true,bills_available:true,bills_found_total:1,bills_found_in_period:0,reason:'bills_outside_period',last_sync_at:null},
   {card_last4:'2222',bills_supported:null,bills_available:true,bills_found_total:0,bills_found_in_period:0,reason:'empty_response',last_sync_at:null},
@@ -208,6 +208,20 @@ test('cobertura distingue bills retornadas, resposta vazia e falha sem inventar 
  assert.equal(result.next_bill_estimate.projected_total_by_currency,null);
  assert.equal(result.metrics.card_spending.amount_by_currency[0].amount_centavos,8000);
  assert.equal(result.metrics.bills_due.coverage_complete,false);
+});
+
+test('Bill fora do período não torna a cobertura mensal completa',async()=>{
+ const req=async path=>{
+  if(path==='/accounts?itemId=item-card')return {results:[{id:'card-outside-period',itemId:'item-card',type:'CREDIT',number:'***8603'}]};
+  if(path.startsWith('/v2/transactions?'))return {results:[],next:null};
+  if(path==='/bills?accountId=card-outside-period')return {results:[{id:'bill-november',accountId:'card-outside-period',dueDate:'2026-11-20T00:00:00Z',totalAmount:200,totalAmountCurrencyCode:'BRL'}]};
+  throw new Error('unexpected path '+path);
+ };
+ const result=await collectCards(req,['item-card'],'2026-10-01','2026-10-31');
+ assert.deepEqual(result.faturas_a_vencer_no_periodo.coverage,{complete:false,cards_with_bills:0,cards_without_bills:1,source:'Pluggy Credit Card Bills totalAmount'});
+ assert.equal(result.metrics.bills_due.coverage_complete,false);
+ assert.ok(result.warnings.some(warning=>/nenhuma vence no período solicitado/.test(warning)));
+ assert.equal(result.bill_coverage_by_card[0].reason,'bills_outside_period');
 });
 
 test('pagamento bancário e pagamento no cartão ficam separados e par pending não confirma quitação',async()=>{

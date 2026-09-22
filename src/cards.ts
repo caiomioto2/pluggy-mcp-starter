@@ -335,6 +335,7 @@ export async function collectCards(request: Request, itemIds: string[], from: st
       return [] as Bill[];
     });
     if (billsAvailable && accountBills.length === 0) warnings.push(`A Pluggy retornou Bills vazio para o cartão ${last4(account.number) ?? account.id}; suporte e cobertura do período permanecem desconhecidos.`);
+    if (billsAvailable && accountBills.length > 0 && !accountBills.some(bill => billIsDueInPeriod(bill, from, to))) warnings.push(`A Pluggy retornou Bills para o cartão ${last4(account.number) ?? account.id}, mas nenhuma vence no período solicitado; cobertura desse período permanece desconhecida.`);
     const billTransactions = await Promise.all(accountBills.filter(bill => billIsDueInPeriod(bill, from, to)).map(async bill =>
       listBillTransactions(request, bill.id).catch(() => {
         warnings.push(`A Pluggy não disponibilizou os lançamentos da fatura ${bill.id}.`);
@@ -368,7 +369,7 @@ export async function collectCards(request: Request, itemIds: string[], from: st
     total.bills_count += 1;
     totalsByCurrency.set(bill.currency, total);
   }
-  const cardsWithBills = cardResults.filter(result => result.accountBills.length > 0).length;
+  const cardsWithBills = cardResults.filter(result => result.accountBills.some(bill => billIsDueInPeriod(bill, from, to))).length;
   const cardsWithoutBills = cards.length - cardsWithBills;
   const billCoverageByCard = cardResults.map(({ account, accountBills, billsAvailable, transactionsAvailable }) => {
     const billsInPeriod = accountBills.filter(bill => billIsDueInPeriod(bill, from, to)).length;
@@ -451,7 +452,7 @@ export async function collectCards(request: Request, itemIds: string[], from: st
   const unassignedInstallments = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.financial_state === "installment_unassigned");
   const candidateTotals = new Map<string, number>();
   for (const transaction of candidateOpenPurchases) candidateTotals.set(transaction.currency, (candidateTotals.get(transaction.currency) ?? 0) + transaction.amount_centavos);
-  const billsComplete = cardResults.length > 0 && cardResults.every(result => result.billsAvailable && result.accountBills.length > 0);
+  const billsComplete = cardResults.length > 0 && cardResults.every(result => result.billsAvailable && result.accountBills.some(bill => billIsDueInPeriod(bill, from, to)));
   const transactionsComplete = cardResults.every(result => result.transactionsAvailable);
   const bankPaymentRecords = bankTransactions.map(({ transaction }) => transaction);
   const bankPaymentTotals = new Map<string, { currency: string; amount_centavos: number; transaction_count: number }>();
