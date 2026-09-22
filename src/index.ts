@@ -8,6 +8,7 @@ import { collectMany } from "./collect.js";
 import { startHttpServer } from "./http.js";
 import { TimedSnapshotCache } from "./cache.js";
 import { refreshItem, refreshStatus } from "./refresh.js";
+import { collectCards } from "./cards.js";
 
 const API_URL = "https://api.pluggy.ai";
 const PAGE_SIZE = 500;
@@ -134,6 +135,7 @@ export function createFinanceServer() {
     inputSchema: z.object({}).strict(), annotations,
   }, async () => result(schema));
   const cache = new TimedSnapshotCache<Awaited<ReturnType<typeof collectMany>>>();
+  const cardsCache = new TimedSnapshotCache<Awaited<ReturnType<typeof collectCards>>>();
   const date = z.string().refine(s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0,10) === s, "Data inválida YYYY-MM-DD");
   server.registerTool("financeiro_query", {
     title: "Consultar contas e transações com SQL",
@@ -149,18 +151,31 @@ export function createFinanceServer() {
       return result({...answer, period: {from,to,timezone:"UTC"}, collectedAt: new Date(snapshot.at).toISOString(), coverage: snapshot.value.coverage, warnings: schema.warnings});
     } catch (error) { return {isError:true, content:[{type:"text" as const,text:errorText(error)}]}; }
   });
+  server.registerTool("financeiro_cartoes", {
+    title: "Consultar cartões, faturas e parcelas",
+    description: "Retorna cartões de crédito, Credit Card Bills e transações com status bruto da Pluggy, billId, parcelas, provenance e confidence. PENDING significa fatura aberta na Pluggy; créditos sem evidência adicional permanecem unknown, sem inferir pagamento ou estorno.",
+    inputSchema: z.object({ from: date, to: date }).strict(),
+    annotations,
+  }, async ({ from, to }) => {
+    try {
+      if (from > to || (Date.parse(to) - Date.parse(from)) / 86400000 > 366) throw new Error("Use período ordenado de até 366 dias.");
+      const key = `${from}:${to}`;
+      const snapshot = await cardsCache.get(key, 900000, () => collectCards(pluggyRequest, configuredItemIds(), from, to));
+      return result({ ...snapshot.value, period: { from, to, timezone: "UTC" }, collectedAt: new Date(snapshot.at).toISOString() });
+    } catch (error) { return { isError: true, content: [{ type: "text" as const, text: errorText(error) }] }; }
+  });
   const itemId = z.string().uuid();
   server.registerTool("financeiro_refresh_item", {
     title: "Atualizar uma conexão financeira",
     description: "Solicita sincronização em tempo real de um único Item Pluggy autorizado. Use após pagamento, transferência, recebimento ou outra alteração recente. Nunca envia credenciais ou MFA. wait_for_completion consulta o estado no máximo três vezes e nunca repete o refresh.",
     inputSchema: z.object({ item_id:itemId, wait_for_completion:z.boolean().optional().default(false) }).strict(),
     annotations: { readOnlyHint:false, destructiveHint:false, idempotentHint:false, openWorldHint:true },
-  }, async ({item_id,wait_for_completion}) => result(await refreshItem({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>cache.invalidate(),waitForCompletion:wait_for_completion})));
+  }, async ({item_id,wait_for_completion}) => result(await refreshItem({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>{ cache.invalidate(); cardsCache.invalidate(); },waitForCompletion:wait_for_completion})));
   server.registerTool("financeiro_refresh_status", {
     title: "Verificar atualização de uma conexão",
     description: "Consulta o estado real de sincronização de um Item Pluggy autorizado. Quando estiver UPDATED, a próxima financeiro_query coleta dados novos.",
     inputSchema: z.object({item_id:itemId}).strict(), annotations,
-  }, async ({item_id}) => result(await refreshStatus({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>cache.invalidate()})));
+  }, async ({item_id}) => result(await refreshStatus({itemId:item_id,allowedItemIds:configuredItemIds(),request:pluggyRequest,invalidateCache:()=>{ cache.invalidate(); cardsCache.invalidate(); }})));
   return server;
 }
 

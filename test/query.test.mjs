@@ -4,6 +4,7 @@ import {runQuery} from '../dist/query.js';
 import {collect,collectMany,normalize} from '../dist/collect.js';
 import {TimedSnapshotCache} from '../dist/cache.js';
 import {refreshItem,refreshStatus} from '../dist/refresh.js';
+import {collectCards} from '../dist/cards.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 const tx=(id,amount,type='DEBIT')=>({id,amount,type,accountId:'a',date:'2026-09-01T12:00:00Z',description:'Teste',currencyCode:'BRL',status:'POSTED',category:'Mercado'});
@@ -84,7 +85,7 @@ test('existing account queries continue to work with added columns',async()=>{
 test('MCP expõe as ferramentas financeiras sem credenciais',async()=>{
  const client=new Client({name:'test',version:'1'});
  const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{},stderr:'pipe'});
- try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_refresh_item','financeiro_refresh_status']);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
+ try{await client.connect(transport);assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['financeiro_schema','financeiro_query','financeiro_cartoes','financeiro_refresh_item','financeiro_refresh_status']);const r=await client.callTool({name:'financeiro_schema',arguments:{}});assert.ok(r.structuredContent.tables.transacoes);assert.ok(r.structuredContent.tables.contas);}finally{await client.close();}
 });
 const itemId='11111111-1111-4111-8111-111111111111';
 test('authorized refresh sends one empty PATCH and invalidates cache',async()=>{
@@ -119,4 +120,23 @@ test('query cache does not retain a snapshot after refresh',async()=>{
  assert.equal((await cache.get('period',900000,async()=>({version:++loads}))).value.version,1);
  await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>cache.invalidate(),request:async()=>({status:'UPDATING'})});
  assert.equal((await cache.get('period',900000,async()=>({version:++loads}))).value.version,2);
+});
+test('cartões expõe faturas, parcelas e semântica sem inferir créditos',async()=>{
+ const req=async path=>{
+  if(path.includes('/accounts?itemId=item-card'))return {results:[{id:'card-8603',itemId:'item-card',type:'CREDIT',subtype:'CREDIT_CARD',number:'***8603',name:'Santander Elite'}]};
+  if(path==='/bills?accountId=card-8603')return {results:[{id:'bill-1',accountId:'card-8603',dueDate:'2026-09-10T00:00:00Z',billClosingDate:'2026-09-03T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL',minimumPaymentAmount:500,allowsInstallments:true,payments:[]}]};
+  if(path==='/bills/bill-1/transactions')return {results:[{...tx('posted-purchase',100,'DEBIT'),accountId:'card-8603',creditCardMetadata:{installmentNumber:2,totalInstallments:6,totalAmount:600,billId:'bill-1'}}]};
+  if(path.startsWith('/v2/transactions?'))return {results:[{...tx('pending-credit',-7945.44,'CREDIT'),accountId:'card-8603',status:'PENDING'}],next:null};
+  throw new Error('unexpected path '+path);
+ };
+ const result=await collectCards(req,['item-card'],'2026-09-01','2026-09-30');
+ assert.deepEqual(result.cards,[{account_id:'card-8603',item_id:'item-card',name:'Santander Elite',last4:'8603'}]);
+ assert.equal(result.bills[0].billId,'bill-1');
+ const pending=result.transactions.find(transaction=>transaction.id==='pending-credit');
+ assert.deepEqual(pending,{id:'pending-credit',account_id:'card-8603',amount_centavos:-794544,currency:'BRL',raw_status:'PENDING',billId:null,transaction_role:'unknown',semantic_status:'open_bill',installment_number:null,total_installments:null,total_amount_centavos:null,installment_group_id:null,provenance:{billId:'unavailable',transaction_role:'derived',semantic_status:'provider',installment:'unavailable'},confidence:{transaction_role:'low',semantic_status:'high',installment:'low'}});
+ const posted=result.transactions.find(transaction=>transaction.id==='posted-purchase');
+ assert.equal(posted.semantic_status,'due_bill');
+ assert.equal(posted.transaction_role,'purchase');
+ assert.deepEqual(posted.provenance,{billId:'provider',transaction_role:'provider',semantic_status:'provider',installment:'provider'});
+ assert.equal(posted.installment_group_id,null);
 });

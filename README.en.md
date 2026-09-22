@@ -51,6 +51,7 @@ Run the HTTP server with Docker behind HTTPS, or use the OpenAI Secure MCP Tunne
 
 - `financeiro_schema` returns the available tables and SQL examples.
 - `financeiro_query` accepts read-only `SELECT` queries over `accounts` and `transactions`.
+- `financeiro_cartoes` returns credit cards, bills, installments, and documented `PENDING`/`POSTED` semantics while preserving raw Pluggy data and never inferring missing fields.
 - `financeiro_refresh_item` requests a sync for one authorized `item_id`. Use it after a payment, transfer, income, or other recent change. It sends an empty body to Pluggy, never sends credentials or MFA, and never refreshes every connection at once. With `wait_for_completion: true`, it polls at most three times at two-second intervals.
 - `financeiro_refresh_status` reads the current sync state. When it returns `UPDATED`, call `financeiro_query` again: refresh invalidates the 15-minute in-memory snapshot, so the query collects fresh data.
 

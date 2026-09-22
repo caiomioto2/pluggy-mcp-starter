@@ -12,7 +12,7 @@ O [pluggy-mcp oficial](https://github.com/pluggyai/pluggy-mcp) é ótimo para de
 
 Este projeto:
 - **Agrega múltiplos `itemId`s** em um único banco de dados local
-- **Expor ferramentas em português** (`financeiro_query`, `financeiro_schema`, `financeiro_refresh_item`)
+- **Expor ferramentas em português** (`financeiro_query`, `financeiro_cartoes`, `financeiro_schema`, `financeiro_refresh_item`)
 - **Read-only por padrão** — o agente consulta, nunca movimenta
 - **Self-hosted** — seus dados financeiros não saem do seu servidor
 
@@ -94,6 +94,7 @@ Para OpenAI Secure MCP Tunnel, veja: [docs/03-openai-secure-mcp-tunnel.md](docs/
 | --- | --- |
 | `financeiro_schema` | Lista tabelas (`accounts`, `transactions`) e exemplos de SQL |
 | `financeiro_query` | Executa `SELECT` nas tabelas financeiras (read-only) |
+| `financeiro_cartoes` | Lista cartões, faturas, parcelas e a semântica documentada de `PENDING`/`POSTED`, sem inferir campos ausentes |
 | `financeiro_refresh_item` | Solicita sincronização de uma conexão específica |
 | `financeiro_refresh_status` | Mostra estado da sincronização |
 
