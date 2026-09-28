@@ -9,6 +9,7 @@ import { startHttpServer } from "./http.js";
 import { TimedSnapshotCache } from "./cache.js";
 import { refreshItem, refreshStatus } from "./refresh.js";
 import { collectCards } from "./cards.js";
+import { PluggyHttpError, toPluggyError } from "./pluggy-errors.js";
 
 const API_URL = "https://api.pluggy.ai";
 const PAGE_SIZE = 500;
@@ -38,17 +39,6 @@ interface PluggyPage<T> {
   totalPages?: number;
   page?: number;
   pageSize?: number;
-}
-
-class PluggyHttpError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly code: string | undefined,
-    message: string,
-  ) {
-    super(message);
-    this.name = "PluggyHttpError";
-  }
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -116,21 +106,6 @@ async function pluggyApiKey(): Promise<string> {
   } finally {
     pendingApiKey = undefined;
   }
-}
-
-async function toPluggyError(response: Response, operation: string): Promise<PluggyHttpError> {
-  let code: string | undefined;
-  let message = `A Pluggy recusou a operação '${operation}'.`;
-  try {
-    const payload: unknown = await response.json();
-    if (isObject(payload)) {
-      code = typeof payload.code === "string" ? payload.code : undefined;
-      if (typeof payload.message === "string") message = payload.message;
-    }
-  } catch {
-    // Mantém a mensagem segura mesmo quando o corpo não é JSON.
-  }
-  return new PluggyHttpError(response.status, code, message);
 }
 
 function errorText(error: unknown): string {

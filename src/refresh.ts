@@ -7,7 +7,7 @@ type ItemPayload = JsonObject & { status?: string; executionStatus?: string; las
 export type RefreshResult = {
   item_id: string; refresh_requested: boolean; status: string | null; execution_status: string | null;
   last_updated_at: string | null; completed: boolean; requires_user_action: boolean;
-  requires_reconnection: boolean; retryable: boolean; reason: string | null; usage_warning: string; next_allowed_at?: string;
+  requires_reconnection: boolean; retryable: boolean; reason: string | null; usage_warning: string; next_allowed_at?: string; http_status?: number;
 };
 
 export const refreshUsageWarning = "Use o refresh manual somente após uma alteração real e recente. Não repita, agende ou execute em lote: a Pluggy reserva esta atualização para ações disparadas pelo usuário; a sincronização de rotina é automática.";
@@ -43,6 +43,7 @@ function errorResult(itemId: string, error: unknown): RefreshResult {
     requires_reconnection:requiresReconnection, retryable:status === 409 || rateLimited || status === 502 || status === 503,
     reason:rateLimited ? "RATE_LIMIT" : code ?? (status === 404 ? "ITEM_NOT_FOUND" : status === 409 ? "CONFLICT" : "REFRESH_FAILED"), usage_warning:refreshUsageWarning };
   if (nextAllowedAt) result.next_allowed_at = nextAllowedAt;
+  if (status !== undefined) result.http_status = status;
   return result;
 }
 
