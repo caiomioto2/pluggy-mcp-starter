@@ -102,8 +102,18 @@ test('refresh handles conflict, rate limit, MFA, credentials and missing Item sa
   const error=Object.assign(new Error('api-key must-not-leak'),{status,code});
   const result=await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>{},request:async()=>{throw error;}});
   assert.equal(result.reason,expected);if(field)assert.equal(result[field],true);assert.equal(JSON.stringify(result).includes('must-not-leak'),false);
+  assert.equal(result.http_status,status);
  }
 });
+
+test('generic 500 error exposes http_status but remains non-retryable REFRESH_FAILED', async() => {
+ const error = Object.assign(new Error('Internal Server Error'), {status: 500});
+ const result = await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>{},request:async()=>{throw error;}});
+ assert.equal(result.reason, 'REFRESH_FAILED');
+ assert.equal(result.retryable, false);
+ assert.equal(result.http_status, 500);
+});
+
 test('bounded polling checks status without another PATCH',async()=>{
  let gets=0;let waits=0;
  const result=await refreshItem({itemId,allowedItemIds:[itemId],invalidateCache:()=>{},waitForCompletion:true,wait:async()=>{waits++;},request:async(_path,init)=>{
