@@ -12,6 +12,7 @@ if [ -z "${PLUGGY_ITEM_IDS:-}" ] && [ -z "${PLUGGY_ITEM_ID:-}" ]; then
 fi
 
 tunnel-client init \
+  --force \
   --sample sample_mcp_stdio_local \
   --profile pluggy-mcp \
   --tunnel-id "$OPENAI_TUNNEL_ID" \
