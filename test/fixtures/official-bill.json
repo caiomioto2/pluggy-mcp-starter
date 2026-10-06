@@ -1,0 +1,11 @@
+{
+  "id": "05c693bf-c196-47ea-a28c-8251d6bb8a06",
+  "dueDate": "2023-07-20T00:00:00",
+  "billClosingDate": "2023-07-13T00:00:00",
+  "totalAmount": 50000,
+  "totalAmountCurrencyCode": "BRL",
+  "minimumPaymentAmount": 50000,
+  "allowsInstallments": true,
+  "financeCharges": [{"id":"123456bf-c196-47ea-a28c-8251d6bb8777","type":"IOF","amount":20.51,"currencyCode":"BRL","additionalInfo":"NA"}],
+  "payments": [{"id":"9f1c7b2e-5d3a-4c8b-a1e2-6f7d8c9b0a1b","valueType":"FULL_PAYMENT","paymentDate":"2023-07-20T00:00:00","paymentMode":"DEBIT_ACCOUNT","amount":50000,"currencyCode":"BRL"}]
+}

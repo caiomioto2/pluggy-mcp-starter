@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { PluggyHttpError } from "./pluggy-errors.js";
+import { paymentSchema, chargeSchema, reconcileBill, type Reconciliation } from "./bill-reconciliation.js";
 
 const accountSchema = z.object({
   id: z.string().min(1),
@@ -7,18 +9,23 @@ const accountSchema = z.object({
   subtype: z.string().nullable().optional(),
   name: z.string().nullable().optional(),
   number: z.string().nullable().optional(),
+  balance: z.number().finite().nullable().optional(),
+  currencyCode: z.string().nullable().optional(),
 });
+
+const providerDate = z.union([z.iso.date(), z.iso.datetime({ local: true, offset: true })]);
 
 const billSchema = z.object({
   id: z.string().min(1),
-  accountId: z.string().min(1),
-  dueDate: z.string().nullable().optional(),
-  billClosingDate: z.string().nullable().optional(),
+  accountId: z.string().min(1).optional(),
+  dueDate: providerDate.nullable().optional(),
+  billClosingDate: providerDate.nullable().optional(),
   totalAmount: z.number().finite(),
   totalAmountCurrencyCode: z.string().min(1),
   minimumPaymentAmount: z.number().finite().nullable().optional(),
   allowsInstallments: z.boolean().nullable().optional(),
-  payments: z.array(z.unknown()).nullable().optional(),
+  payments: z.array(paymentSchema).nullable().optional(),
+  financeCharges: z.array(chargeSchema).nullable().optional(),
 });
 
 const creditCardMetadataSchema = z.object({
@@ -39,18 +46,20 @@ const transactionSchema = z.object({
   currencyCode: z.string().min(1),
   type: z.enum(["DEBIT", "CREDIT"]),
   status: z.enum(["PENDING", "POSTED"]),
+  operationType: z.string().nullable().optional(),
+  amountInAccountCurrency: z.number().finite().nullable().optional(),
   billId: z.string().min(1).nullable().optional(),
   creditCardMetadata: creditCardMetadataSchema.nullable().optional(),
 });
 
 type Account = z.infer<typeof accountSchema>;
-type Bill = z.infer<typeof billSchema>;
+type Bill = z.infer<typeof billSchema> & { accountId: string };
 type Transaction = z.infer<typeof transactionSchema>;
 type Request = <T>(path: string) => Promise<T>;
 
 type Provenance = "provider" | "derived" | "unavailable";
 type Confidence = "high" | "medium" | "low";
-type BillCoverageReason = "bills_returned" | "bills_outside_period" | "empty_response" | "request_failed";
+type BillCoverageReason = "bills_returned" | "bills_outside_period" | "empty_response" | "request_failed" | "validation_failed" | "authorization_failed" | "rate_limited" | "http_failed";
 type NormalizedBill = {
   billId: string;
   account_id: string;
@@ -60,13 +69,16 @@ type NormalizedBill = {
   currency: string;
   minimum_payment_amount_centavos: number | null;
   allows_installments: boolean | null;
-  payments: unknown[];
+  payments: z.infer<typeof paymentSchema>[] | null;
+  finance_charges: z.infer<typeof chargeSchema>[] | null;
+  reconciliation: Reconciliation;
 };
 
 export type CardSnapshot = {
   cards: Array<{
     account_id: string; item_id: string; name: string | null; last4: string | null;
-    current_bill: null | { bill_id: string; status: "unknown"; closing_date: string | null; due_date: string | null; total_amount_centavos: number; paid_amount_centavos: null; remaining_amount_centavos: null; source: "provider_bill"; confidence: Confidence };
+    total_used: { amount_centavos: number | null; currency: string | null; source: "provider_account_balance" };
+    current_bill: null | { bill_id: string; status: Reconciliation["status"]; closing_date: string | null; due_date: string | null; total_amount_centavos: number; paid_amount_centavos: number | null; remaining_amount_centavos: number | null; finance_charges_centavos: number | null; reconciliation: Reconciliation; source: "provider_bill"; confidence: Confidence };
     next_bill: { bill_id: string | null; due_date: string | null; provider_bill_total_amount_centavos: number | null; projected_amount_centavos: null; observed_open_purchase_subtotal_centavos: number; open_purchase_amount_attribution: "unassigned_without_bill_link"; confirmed_installment_ids: string[]; open_purchase_ids: string[]; unassigned_installment_ids: string[]; confidence: Confidence };
   }>;
   bills: NormalizedBill[];
@@ -81,6 +93,7 @@ export type CardSnapshot = {
     reason: BillCoverageReason;
     reason_if_incomplete: string | null;
     last_sync_at: string | null;
+    diagnostic: RequestDiagnostic | null;
   }>;
   faturas_a_vencer_no_periodo: {
     bills: NormalizedBill[];
@@ -98,6 +111,8 @@ export type CardSnapshot = {
     raw_status: "PENDING" | "POSTED";
     provider_status: "PENDING" | "POSTED";
     provider_type: "DEBIT" | "CREDIT";
+    provider_operation_type: string | null;
+    amount_in_account_currency_centavos: number | null;
     bill_id: string | null;
     provider_fee_type: string | null;
     billId: string | null;
@@ -127,6 +142,7 @@ export type CardSnapshot = {
     bills_due: { amount_by_currency: Array<{ currency: string; amount_centavos: number; bill_count: number }>; coverage_complete: boolean; source: "provider_bills" };
     bill_payments: { card_side_amount_by_currency: Array<{ currency: string; amount_centavos: number; transaction_count: number }>; bank_side_posted_amount_by_currency: Array<{ currency: string; amount_centavos: number; transaction_count: number }>; bank_reconciliation_complete: boolean; note: string };
   };
+  remaining_balance: { as_of: string; amount_by_currency: Array<{ currency: string; amount_centavos: number; bills_count: number }>; coverage_complete: boolean; confirmed_bills: number; unknown_bill_ids: string[]; cards_without_bills: string[]; scope: string };
   bank_transactions: Array<{ id: string; date: string; description: string; amount_centavos: number; currency: string; status: "PENDING" | "POSTED" }>;
   next_bill_estimate: {
     known_amount_by_currency: Array<{ currency: string; amount_centavos: number }>;
@@ -148,7 +164,7 @@ function last4(number: string | null | undefined): string | null {
   return number?.match(/(\d{4})\D*$/)?.[1] ?? null;
 }
 
-function normalizeBill(bill: Bill): NormalizedBill {
+function normalizeBill(bill: Bill, asOf: string): NormalizedBill {
   return {
     billId: bill.id,
     account_id: bill.accountId,
@@ -158,7 +174,9 @@ function normalizeBill(bill: Bill): NormalizedBill {
     currency: bill.totalAmountCurrencyCode,
     minimum_payment_amount_centavos: bill.minimumPaymentAmount == null ? null : cents(bill.minimumPaymentAmount),
     allows_installments: bill.allowsInstallments ?? null,
-    payments: bill.payments ?? [],
+    payments: bill.payments ?? null,
+    finance_charges: bill.financeCharges ?? null,
+    reconciliation: { status: "unknown", paid_amount_centavos: null, finance_charges_centavos: null, remaining_amount_centavos: null, source: "provider_bill_next_cycle", confidence: "low", as_of: asOf, reference_due_date: null, bill_ids: [bill.id], payment_ids: [], charge_ids: [], reason: "not_reconciled" },
   };
 }
 
@@ -171,7 +189,8 @@ function normalizeTransaction(transaction: Transaction, billsById: Map<string, N
   const hasInstallmentData = metadata?.installmentNumber != null || metadata?.totalInstallments != null || metadata?.totalAmount != null;
   const bill = billId ? billsById.get(billId) ?? null : null;
   const hasInstallmentIdentity = metadata?.installmentNumber != null || metadata?.totalInstallments != null || metadata?.totalAmount != null;
-  const explicitBillPayment = transaction.amount < 0 && billPaymentDescription.test(transaction.description);
+  const providerBillPayment = transaction.operationType === "PAGAMENTO_FATURA";
+  const explicitBillPayment = providerBillPayment || (transaction.operationType == null && transaction.amount < 0 && billPaymentDescription.test(transaction.description));
   const explicitFee = metadata?.feeType != null && feeDescription.test(transaction.description);
   const normalizedRole: CardSnapshot["transactions"][number]["normalized_role"] = explicitBillPayment ? "bill_payment"
     : explicitFee ? "fee"
@@ -209,6 +228,8 @@ function normalizeTransaction(transaction: Transaction, billsById: Map<string, N
     raw_status: transaction.status,
     provider_status: transaction.status,
     provider_type: transaction.type,
+    provider_operation_type: transaction.operationType ?? null,
+    amount_in_account_currency_centavos: transaction.amountInAccountCurrency == null ? null : cents(transaction.amountInAccountCurrency),
     bill_id: billId,
     provider_fee_type: metadata?.feeType ?? null,
     billId,
@@ -233,7 +254,7 @@ function normalizeTransaction(transaction: Transaction, billsById: Map<string, N
     provenance: {
       billId: billId ? "provider" : "unavailable",
       transaction_role: transactionRole === "unknown" ? "unavailable" : "derived",
-      normalized_role: normalizedRole === "unknown" ? "unavailable" : "derived",
+      normalized_role: providerBillPayment ? "provider" : normalizedRole === "unknown" ? "unavailable" : "derived",
       semantic_status: "derived",
       financial_state: "derived",
       payment_reconciliation: "unavailable",
@@ -243,7 +264,7 @@ function normalizeTransaction(transaction: Transaction, billsById: Map<string, N
     },
     confidence: {
       transaction_role: transactionRole === "unknown" ? "low" : metadata?.feeType != null ? "low" : "medium",
-      normalized_role: normalizedRole === "unknown" ? "low" : metadata?.feeType != null && !explicitFee ? "low" : "medium",
+      normalized_role: providerBillPayment ? "high" : normalizedRole === "unknown" ? "low" : metadata?.feeType != null && !explicitFee ? "low" : "medium",
       semantic_status: "medium",
       financial_state: financialState === "unknown" || financialState === "future_installment" || financialState === "installment_other_cycle" || financialState === "installment_unassigned" ? "low" : "medium",
       payment_reconciliation: "low",
@@ -253,9 +274,46 @@ function normalizeTransaction(transaction: Transaction, billsById: Map<string, N
   };
 }
 
+type RequestDiagnostic = {
+  category: "validation" | "authorization" | "rate_limit" | "http" | "transport";
+  endpoint: "/bills"; http_status: number | null;
+  schema_issues: Array<{ path: string; code: string }>;
+};
+
+function diagnoseBills(error: unknown): RequestDiagnostic {
+  if (error instanceof z.ZodError) return { category: "validation", endpoint: "/bills", http_status: null,
+    // Only schema-owned names and array indices: never include provider values.
+    schema_issues: error.issues.map(issue => ({ path: issue.path.join("."), code: issue.code })) };
+  if (error instanceof PluggyHttpError) return { category: error.status === 401 || error.status === 403 ? "authorization" : error.status === 429 ? "rate_limit" : "http", endpoint: "/bills", http_status: error.status, schema_issues: [] };
+  return { category: "transport", endpoint: "/bills", http_status: null, schema_issues: [] };
+}
+
+function paginationFailure() {
+  return new z.ZodError([{ code: "custom", path: ["page"], message: "Invalid or incomplete pagination" }]);
+}
+
 async function listBills(request: Request, accountId: string): Promise<Bill[]> {
-  const page = z.object({ results: z.array(billSchema) }).parse(await request(`/bills?accountId=${encodeURIComponent(accountId)}`));
-  return page.results;
+  const bills = new Map<string, Bill>();
+  let totalPages: number | undefined;
+  for (let page = 1; page <= 200; page += 1) {
+    const suffix = page === 1 ? "" : `&page=${page}`;
+    const payload = z.object({ results: z.array(billSchema), page: z.number().int().positive().optional(), totalPages: z.number().int().nonnegative().optional() })
+      .parse(await request(`/bills?accountId=${encodeURIComponent(accountId)}${suffix}`));
+    if ((payload.page != null && payload.page !== page) || (totalPages != null && payload.totalPages !== totalPages) || (payload.totalPages != null && payload.page == null)) throw paginationFailure();
+    totalPages = payload.totalPages;
+    const previousCount = bills.size;
+    for (const [index, bill] of payload.results.entries()) {
+      if (bill.accountId != null && bill.accountId !== accountId) throw new z.ZodError([{ code: "custom", path: ["results", index, "accountId"], message: "Account context mismatch" }]);
+      const linkedBill = { ...bill, accountId };
+      if (bills.has(bill.id) && JSON.stringify(bills.get(bill.id)) !== JSON.stringify(linkedBill)) throw paginationFailure();
+      bills.set(bill.id, linkedBill);
+    }
+    if (page > 1 && bills.size === previousCount) throw paginationFailure();
+    if (totalPages != null && totalPages === 0 && payload.results.length > 0) throw paginationFailure();
+    if (totalPages == null || page >= totalPages) return [...bills.values()];
+    if (!payload.results.length) throw paginationFailure();
+  }
+  throw paginationFailure();
 }
 
 async function listCurrentTransactions(request: Request, accountId: string, from: string, to: string): Promise<Transaction[]> {
@@ -274,9 +332,27 @@ async function listCurrentTransactions(request: Request, accountId: string, from
   }
 }
 
-async function listBillTransactions(request: Request, billId: string): Promise<Transaction[]> {
-  const payload = z.object({ results: z.array(transactionSchema) }).parse(await request(`/bills/${encodeURIComponent(billId)}/transactions`));
-  return payload.results;
+async function listBillTransactions(request: Request, accountId: string, billId: string): Promise<Transaction[]> {
+  // Public API reference documents billId only on /transactions (supported
+  // until 2026-12-31). /bills/:id/transactions in the lifecycle guide describes
+  // the institution flow, not a public Pluggy REST resource.
+  const transactions = new Map<string, Transaction>();
+  let totalPages: number | undefined;
+  for (let page = 1; page <= 200; page += 1) {
+    const params = new URLSearchParams({ accountId, billId, page: String(page) });
+    const payload = z.object({ results: z.array(transactionSchema), page: z.number().int().positive().optional(), totalPages: z.number().int().nonnegative().optional() }).parse(await request(`/transactions?${params}`));
+    if ((payload.page != null && payload.page !== page) || (totalPages != null && payload.totalPages !== totalPages) || (payload.totalPages != null && payload.page == null)) throw paginationFailure();
+    totalPages = payload.totalPages;
+    for (const transaction of payload.results) {
+      const linkedId = transaction.billId ?? transaction.creditCardMetadata?.billId;
+      if (transaction.accountId !== accountId || linkedId !== billId) throw new z.ZodError([{ code: "custom", path: ["results"], message: "Transaction context mismatch" }]);
+      transactions.set(transaction.id, transaction);
+    }
+    if (totalPages != null && ((totalPages === 0 && payload.results.length > 0) || (page > 1 && !payload.results.length))) throw paginationFailure();
+    if (totalPages == null || page >= totalPages) return [...transactions.values()];
+    if (!payload.results.length) throw paginationFailure();
+  }
+  throw paginationFailure();
 }
 
 function dateKey(value: string | null | undefined): string | null {
@@ -307,7 +383,8 @@ async function mapWithConcurrency<T, R>(values: readonly T[], limit: number, ope
  * Pluggy a garante. Créditos continuam unknown: não há evidência suficiente
  * para escolher entre pagamento, estorno ou outro crédito.
  */
-export async function collectCards(request: Request, itemIds: string[], from: string, to: string): Promise<CardSnapshot> {
+export async function collectCards(request: Request, itemIds: string[], from: string, to: string, asOf = new Date().toISOString()): Promise<CardSnapshot> {
+  z.iso.datetime({ offset: true }).parse(asOf);
   const cards: Array<{ account: Account; itemId: string }> = [];
   const bankAccounts: Array<{ account: Account; itemId: string }> = [];
   for (const itemId of itemIds) {
@@ -329,20 +406,23 @@ export async function collectCards(request: Request, itemIds: string[], from: st
       return [] as Transaction[];
     });
     let billsAvailable = true;
-    const accountBills = await listBills(request, account.id).catch(() => {
+    let diagnostic: RequestDiagnostic | null = null;
+    const accountBills = await listBills(request, account.id).catch((error: unknown) => {
       billsAvailable = false;
-      warnings.push(`A Pluggy não disponibilizou Credit Card Bills para o cartão ${last4(account.number) ?? account.id}.`);
+      diagnostic = diagnoseBills(error);
+      warnings.push(`Falha ao consultar/validar Credit Card Bills (${diagnostic.category}); suporte da instituição permanece desconhecido.`);
       return [] as Bill[];
     });
     if (billsAvailable && accountBills.length === 0) warnings.push(`A Pluggy retornou Bills vazio para o cartão ${last4(account.number) ?? account.id}; suporte e cobertura do período permanecem desconhecidos.`);
     if (billsAvailable && accountBills.length > 0 && !accountBills.some(bill => billIsDueInPeriod(bill, from, to))) warnings.push(`A Pluggy retornou Bills para o cartão ${last4(account.number) ?? account.id}, mas nenhuma vence no período solicitado; cobertura desse período permanece desconhecida.`);
     const billTransactions = await Promise.all(accountBills.filter(bill => billIsDueInPeriod(bill, from, to)).map(async bill =>
-      listBillTransactions(request, bill.id).catch(() => {
-        warnings.push(`A Pluggy não disponibilizou os lançamentos da fatura ${bill.id}.`);
+      listBillTransactions(request, account.id, bill.id).catch(() => {
+        transactionsAvailable = false;
+        warnings.push(`Falha ao consultar/validar os lançamentos da fatura ${bill.id}.`);
         return [] as Transaction[];
       }),
     ));
-    return { account, accountBills, billsAvailable, transactionsAvailable, transactions: [...currentTransactions, ...billTransactions.flat()], warnings };
+    return { account, accountBills, billsAvailable, transactionsAvailable, diagnostic: diagnostic as RequestDiagnostic | null, transactions: [...currentTransactions, ...billTransactions.flat()], warnings };
   });
   const warnings = cardResults.flatMap(result => result.warnings);
   const bankTransactionsResult = await mapWithConcurrency(bankAccounts, 3, async ({ account, itemId }) => {
@@ -354,13 +434,14 @@ export async function collectCards(request: Request, itemIds: string[], from: st
   });
   const bankTransactionsAvailable = bankAccounts.length > 0 && bankTransactionsResult.every(result => result.available);
   const bankTransactions = bankTransactionsResult.flatMap(result => result.transactions
-    .filter(transaction => transaction.amount !== 0 && transaction.type === "DEBIT" && transaction.status === "POSTED" && /pagamento\s+(?:de\s+)?cart[aã]o(?:\s+de)?\s+cr[eé]dito/i.test(transaction.description))
+    .filter(transaction => transaction.amount !== 0 && transaction.type === "DEBIT" && transaction.status === "POSTED" && (transaction.operationType === "PAGAMENTO_FATURA" || (transaction.operationType == null && /pagamento\s+(?:de\s+)?(?:fatura\s+)?cart[aã]o(?:\s+de)?\s+cr[eé]dito/i.test(transaction.description))))
     .map(transaction => ({ itemId: result.itemId, transaction })));
   for (const result of cardResults) {
     bills.push(...result.accountBills);
     for (const transaction of result.transactions) transactions.set(transaction.id, transaction);
   }
-  const normalizedBills = bills.map(normalizeBill);
+  const normalizedBills = bills.map(bill => normalizeBill(bill, asOf));
+  for (const bill of normalizedBills) bill.reconciliation = reconcileBill(bill, normalizedBills, asOf);
   const billsDueInPeriod = normalizedBills.filter(bill => bill.due_date !== null && bill.due_date.slice(0, 10) >= from && bill.due_date.slice(0, 10) <= to);
   const totalsByCurrency = new Map<string, { currency: string; total_amount_centavos: number; bills_count: number }>();
   for (const bill of billsDueInPeriod) {
@@ -371,9 +452,9 @@ export async function collectCards(request: Request, itemIds: string[], from: st
   }
   const cardsWithBills = cardResults.filter(result => result.accountBills.some(bill => billIsDueInPeriod(bill, from, to))).length;
   const cardsWithoutBills = cards.length - cardsWithBills;
-  const billCoverageByCard = cardResults.map(({ account, accountBills, billsAvailable, transactionsAvailable }) => {
+  const billCoverageByCard = cardResults.map(({ account, accountBills, billsAvailable, transactionsAvailable, diagnostic }) => {
     const billsInPeriod = accountBills.filter(bill => billIsDueInPeriod(bill, from, to)).length;
-    const reason: BillCoverageReason = !billsAvailable ? "request_failed"
+    const reason: BillCoverageReason = !billsAvailable ? diagnostic?.category === "validation" ? "validation_failed" : diagnostic?.category === "authorization" ? "authorization_failed" : diagnostic?.category === "rate_limit" ? "rate_limited" : diagnostic?.category === "http" ? "http_failed" : "request_failed"
       : accountBills.length === 0 ? "empty_response"
         : billsInPeriod === 0 ? "bills_outside_period" : "bills_returned";
     return {
@@ -385,11 +466,12 @@ export async function collectCards(request: Request, itemIds: string[], from: st
       bills_found_in_period: billsInPeriod,
       transactions_available: transactionsAvailable,
       reason,
-      reason_if_incomplete: !billsAvailable ? "Bills API request failed"
+      reason_if_incomplete: !billsAvailable ? `Bills ${diagnostic?.category ?? "transport"} failure; institution support is unknown`
         : !transactionsAvailable ? "Card transactions API request failed"
           : accountBills.length === 0 ? "Bills API returned no bills; support and period coverage are unknown"
             : billsInPeriod === 0 ? "Bills returned, but none are due in the requested period" : null,
       last_sync_at: null,
+      diagnostic,
     };
   });
   const billsById = new Map(normalizedBills.map(bill => [bill.billId, bill]));
@@ -446,7 +528,7 @@ export async function collectCards(request: Request, itemIds: string[], from: st
     return [...totals.values()];
   };
   const purchases = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.normalized_role === "purchase" && transaction.financial_state !== "future_installment" && transaction.financial_state !== "installment_unassigned" && transaction.amount_centavos > 0);
-  const cardSidePayments = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.normalized_role === "bill_payment" && transaction.amount_centavos < 0);
+  const cardSidePayments = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.normalized_role === "bill_payment" && transaction.provider_type === "CREDIT" && transaction.amount_centavos !== 0);
   const candidateOpenPurchases = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.financial_state === "open_bill_purchase" && transaction.installment_number == null);
   const excludedFutureInstallments = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.financial_state === "future_installment");
   const unassignedInstallments = normalizedTransactions.filter(transaction => transactionDateInRange(transaction) && transaction.financial_state === "installment_unassigned");
@@ -477,16 +559,19 @@ export async function collectCards(request: Request, itemIds: string[], from: st
         item_id: account.itemId ?? itemId,
         name: account.name ?? null,
         last4: last4(account.number),
+        total_used: { amount_centavos: account.balance == null ? null : cents(account.balance), currency: account.currencyCode ?? null, source: "provider_account_balance" as const },
         current_bill: currentBill ? {
           bill_id: currentBill.billId,
-          status: "unknown" as const,
+          status: currentBill.reconciliation.status,
           closing_date: currentBill.closing_date,
           due_date: currentBill.due_date,
           total_amount_centavos: currentBill.total_amount_centavos,
-          paid_amount_centavos: null,
-          remaining_amount_centavos: null,
+          paid_amount_centavos: currentBill.reconciliation.paid_amount_centavos,
+          remaining_amount_centavos: currentBill.reconciliation.remaining_amount_centavos,
+          finance_charges_centavos: currentBill.reconciliation.finance_charges_centavos,
+          reconciliation: currentBill.reconciliation,
           source: "provider_bill" as const,
-          confidence: "high" as const,
+          confidence: currentBill.reconciliation.confidence,
         } : null,
         next_bill: {
           bill_id: nextBill?.billId ?? null,
@@ -514,6 +599,18 @@ export async function collectCards(request: Request, itemIds: string[], from: st
       card_spending: { amount_by_currency: byCurrency(purchases, row => row.amount_centavos), confidence: transactionsComplete ? "medium" : "low", source: "card_transactions" },
       bills_due: { amount_by_currency: [...totalsByCurrency.values()].map(({ currency, total_amount_centavos, bills_count }) => ({ currency, amount_centavos: total_amount_centavos, bill_count: bills_count })), coverage_complete: billsComplete, source: "provider_bills" },
       bill_payments: { card_side_amount_by_currency: byCurrency(cardSidePayments, row => Math.abs(row.amount_centavos)), bank_side_posted_amount_by_currency: [...bankPaymentTotals.values()], bank_reconciliation_complete: bankTransactionsAvailable, note: "Métricas separadas por origem. Uma conciliação única por valor, moeda e data não prova a quitação da fatura; sem cobertura bancária completa, o estado de conciliação é bank_data_unavailable." },
+    },
+    remaining_balance: {
+      as_of: asOf,
+      amount_by_currency: [...new Set(billsDueInPeriod.map(bill => bill.currency))].flatMap(currency => {
+        const confirmed = billsDueInPeriod.filter(bill => bill.currency === currency && bill.reconciliation.remaining_amount_centavos != null);
+        return confirmed.length ? [{ currency, amount_centavos: confirmed.reduce((sum, bill) => sum + bill.reconciliation.remaining_amount_centavos!, 0), bills_count: confirmed.length }] : [];
+      }),
+      coverage_complete: billsComplete && billsDueInPeriod.every(bill => bill.reconciliation.remaining_amount_centavos != null),
+      confirmed_bills: billsDueInPeriod.filter(bill => bill.reconciliation.remaining_amount_centavos != null).length,
+      unknown_bill_ids: billsDueInPeriod.filter(bill => bill.reconciliation.remaining_amount_centavos == null).map(bill => bill.billId),
+      cards_without_bills: cardResults.filter(result => !result.accountBills.some(bill => billIsDueInPeriod(bill, from, to))).map(result => result.account.id),
+      scope: "Snapshot dos ciclos do provedor para faturas com vencimento no período; não é saldo de dívida em tempo real. Usa apenas payments/financeCharges da Bill seguinte já vencida; pagamentos bancários e transações do cartão não são descontados novamente.",
     },
     bank_transactions: bankTransactions.map(({ itemId, transaction }) => ({ id: transaction.id, item_id: itemId, date: transaction.date, description: transaction.description, amount_centavos: cents(transaction.amount), currency: transaction.currencyCode, status: transaction.status })),
     next_bill_estimate: {

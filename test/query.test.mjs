@@ -137,7 +137,7 @@ test('cartões expõe faturas, parcelas e semântica sem inferir créditos',asyn
   paths.push(path);
   if(path.includes('/accounts?itemId=item-card'))return {results:[{id:'card-8603',itemId:'item-card',type:'CREDIT',subtype:'CREDIT_CARD',number:'***8603',name:'Santander Elite'}]};
   if(path==='/bills?accountId=card-8603')return {results:[{id:'bill-old',accountId:'card-8603',dueDate:'2026-08-10T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL'},{id:'bill-1',accountId:'card-8603',dueDate:'2026-09-10T00:00:00Z',billClosingDate:'2026-09-03T00:00:00Z',totalAmount:10000,totalAmountCurrencyCode:'BRL',minimumPaymentAmount:500,allowsInstallments:true,payments:[]}]};
-  if(path==='/bills/bill-1/transactions')return {results:[{...tx('posted-purchase',100,'DEBIT'),accountId:'card-8603',date:'2026-08-22T12:00:00Z',creditCardMetadata:{installmentNumber:2,totalInstallments:6,totalAmount:600,billId:'bill-1'}}]};
+  if(path==='/transactions?accountId=card-8603&billId=bill-1&page=1')return {results:[{...tx('posted-purchase',100,'DEBIT'),accountId:'card-8603',date:'2026-08-22T12:00:00Z',creditCardMetadata:{installmentNumber:2,totalInstallments:6,totalAmount:600,billId:'bill-1'}}]};
   if(path.startsWith('/v2/transactions?'))return {results:[{...tx('pending-credit',-7945.44,'CREDIT'),accountId:'card-8603',status:'PENDING'}],next:null};
   throw new Error('unexpected path '+path);
  };
@@ -155,7 +155,7 @@ test('cartões expõe faturas, parcelas e semântica sem inferir créditos',asyn
  assert.equal(posted.provenance.billId,'provider');assert.equal(posted.provenance.installment,'provider');assert.equal(posted.expected_bill_id,'bill-1');assert.equal(posted.expected_due_date,'2026-09-10T00:00:00Z');
  assert.equal(posted.installment_group_id,null);
  assert.equal(result.metrics.card_spending.amount_by_currency.length,0);
- assert.equal(paths.includes('/bills/bill-old/transactions'),false);
+ assert.equal(paths.includes('/transactions?accountId=card-8603&billId=bill-old&page=1'),false);
  assert.equal(result.coverage.partial,false);
 });
 test('cartões devolve resultado parcial quando um cartão não disponibiliza bills',async()=>{
@@ -167,7 +167,7 @@ test('cartões devolve resultado parcial quando um cartão não disponibiliza bi
   throw new Error('unexpected path '+path);
  };
  const result=await collectCards(req,['item-card'],'2026-09-01','2026-09-30');
- assert.equal(result.cards.length,2);assert.equal(result.coverage.partial,true);assert.equal(result.faturas_a_vencer_no_periodo.coverage.complete,false);assert.equal(result.faturas_a_vencer_no_periodo.coverage.cards_without_bills,2);assert.ok(result.warnings.some(warning=>/não disponibilizou Credit Card Bills/.test(warning)));
+ assert.equal(result.cards.length,2);assert.equal(result.coverage.partial,true);assert.equal(result.faturas_a_vencer_no_periodo.coverage.complete,false);assert.equal(result.faturas_a_vencer_no_periodo.coverage.cards_without_bills,2);assert.ok(result.warnings.some(warning=>/Falha ao consultar\/validar Credit Card Bills/.test(warning)));
 });
 
 test('cobertura distingue bills retornadas, resposta vazia e falha sem inventar suporte',async()=>{

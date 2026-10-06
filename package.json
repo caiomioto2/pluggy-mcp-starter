@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test test/query.test.mjs test/error.test.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "prepare": "npm run build",
