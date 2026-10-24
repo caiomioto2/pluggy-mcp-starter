@@ -69,7 +69,7 @@ export async function collect(request:<T>(path:string)=>Promise<T>,itemId:string
  if (item.executionStatus !== "SUCCESS") throw new Error("Conexão não está com sincronização completa. Nenhum total será apresentado.");
  const connection=await connectionMetadata(request,item,itemId,connectors);
  const accounts=z.object({results:z.array(accountSchema)}).parse(await request("/accounts?itemId="+itemId)).results;
- if (!accounts.length) throw new Error("Nenhuma conta disponível na conexão.");
+ if (!accounts.length) return {rows:[] as Row[],accounts:[] as AccountRow[],coverage:{complete:false,connections:1,accounts:0,transactions:0,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy.",warnings:["Uma conexão configurada não retornou contas; os dados disponíveis das demais conexões são parciais."]}};
  const rows:Row[]=[]; const ids=new Set<string>();
  for(const a of accounts) {
   const params=new URLSearchParams({accountId:a.id,dateFrom:from,dateTo:to});
@@ -103,10 +103,10 @@ export async function collect(request:<T>(path:string)=>Promise<T>,itemId:string
   limite_disponivel_centavos:a.creditData?.availableCreditLimit==null?null:Math.round(a.creditData.availableCreditLimit*100),
   transacoes_no_periodo:rows.filter(row=>row.conta_id===a.id).length
  };});
- return {rows,accounts:accountRows,coverage:{complete:true,connections:1,accounts:accounts.length,transactions:rows.length,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy."}};
+ return {rows,accounts:accountRows,coverage:{complete:true,connections:1,accounts:accounts.length,transactions:rows.length,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy.",warnings:[] as string[]}};
 }
 
-/** Coleta cada conexão configurada. Uma falha impede totais parciais. */
+/** Coleta as conexões configuradas. Falhas reais bloqueiam; conexões sem contas são reportadas como cobertura parcial. */
 export async function collectMany(request:<T>(path:string)=>Promise<T>,itemIds:string[],from:string,to:string) {
  if (!itemIds.length) throw new Error("Nenhuma conexão Pluggy foi configurada.");
  const connectors=new Map<string,Promise<Connector|null>>();
@@ -123,9 +123,11 @@ export async function collectMany(request:<T>(path:string)=>Promise<T>,itemIds:s
   if(transactionIds.has(row.id)) throw new Error("A mesma transação foi retornada por mais de uma conexão. Nenhum total será apresentado.");
   transactionIds.add(row.id);
  }
+ const connectionsWithoutAccounts=collections.filter(collection=>collection.coverage.accounts===0).length;
  return {rows,accounts,coverage:{
-  complete:true,connections:itemIds.length,accounts:accounts.length,transactions:rows.length,
+  complete:collections.every(collection=>collection.coverage.complete),connections:itemIds.length,connections_with_accounts:itemIds.length-connectionsWithoutAccounts,connections_without_accounts:connectionsWithoutAccounts,accounts:accounts.length,transactions:rows.length,
   lastUpdatedAt:collections.map(collection=>collection.coverage.lastUpdatedAt),
-  scope:`${itemIds.length} conexões; somente dados disponibilizados pela Pluggy.`
+  scope:`${itemIds.length} conexões; somente dados disponibilizados pela Pluggy.`,
+  warnings:connectionsWithoutAccounts?[`${connectionsWithoutAccounts} conexão(ões) configurada(s) não retornaram contas; resultado parcial.`]:[]
  }};
 }
