@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ItemGroup } from "./item-groups.js";
 const optionalString=z.string().min(1).nullable().optional();
 const connectorSchema=z.object({
  id:z.union([z.string().min(1),z.number().finite()]).nullable().optional(),name:optionalString,
@@ -24,7 +25,7 @@ const txSchema = z.object({
 });
 export type Row = ReturnType<typeof normalize>;
 export type AccountRow = {
- conta_id:string; item_id:string; connector_id:string|null; connector_name:string|null; institution_name:string|null;
+ conta_id:string; item_id:string; grupo:ItemGroup; connector_id:string|null; connector_name:string|null; institution_name:string|null;
  tipo_conta:"BANK"|"CREDIT"; subtipo:string|null; nome:string|null;
  identificador_mascarado:string|null; saldo_centavos:number|null; moeda:string|null;
  limite_credito_centavos:number|null; limite_disponivel_centavos:number|null;
@@ -58,18 +59,18 @@ async function connectionMetadata(request:<T>(path:string)=>Promise<T>,item:Item
  const fallback=metadataFrom(item,itemId,resolved);
  return {...inline,connector_name:inline.connector_name??fallback.connector_name,institution_name:inline.institution_name??fallback.institution_name};
 }
-export function normalize(t:z.infer<typeof txSchema>, accountType:string) {
- return {id:t.id,conta_id:t.accountId,tipo_conta:accountType,data:t.date.slice(0,10),
+export function normalize(t:z.infer<typeof txSchema>, accountType:string, itemId:string|null=null, group:ItemGroup="nao_classificado") {
+ return {id:t.id,conta_id:t.accountId,item_id:itemId,grupo:group,tipo_conta:accountType,data:t.date.slice(0,10),
  descricao:t.description,categoria:t.category ?? "Sem categoria",moeda:t.currencyCode,
  valor_centavos:Math.round(t.amount*100),tipo:t.type,status:t.status,
  debito_bruto_centavos:t.type==="DEBIT"?Math.round(Math.abs(t.amount)*100):0};
 }
-export async function collect(request:<T>(path:string)=>Promise<T>,itemId:string,from:string,to:string,connectors=new Map<string,Promise<Connector|null>>()) {
+export async function collect(request:<T>(path:string)=>Promise<T>,itemId:string,from:string,to:string,connectors=new Map<string,Promise<Connector|null>>(),group:ItemGroup="nao_classificado") {
  const item=itemSchema.parse(await request("/items/"+itemId));
  if (item.executionStatus !== "SUCCESS") throw new Error("Conexão não está com sincronização completa. Nenhum total será apresentado.");
  const connection=await connectionMetadata(request,item,itemId,connectors);
  const accounts=z.object({results:z.array(accountSchema)}).parse(await request("/accounts?itemId="+itemId)).results;
- if (!accounts.length) return {rows:[] as Row[],accounts:[] as AccountRow[],coverage:{complete:false,connections:1,accounts:0,transactions:0,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy.",warnings:["Uma conexão configurada não retornou contas; os dados disponíveis das demais conexões são parciais."]}};
+ if (!accounts.length) return {rows:[] as Row[],accounts:[] as AccountRow[],coverage:{item_id:itemId,grupo:group,complete:false,connections:1,accounts:0,transactions:0,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy.",warnings:["Uma conexão configurada não retornou contas; os dados disponíveis das demais conexões são parciais."]}};
  const rows:Row[]=[]; const ids=new Set<string>();
  for(const a of accounts) {
   const params=new URLSearchParams({accountId:a.id,dateFrom:from,dateTo:to});
@@ -83,7 +84,7 @@ export async function collect(request:<T>(path:string)=>Promise<T>,itemId:string
     if(t.accountId!==a.id) throw new Error("Resposta de conta inesperada.");
     if(t.date.slice(0,10)<from || t.date.slice(0,10)>to) continue;
     if(ids.has(t.id)) continue;
-    ids.add(t.id); rows.push(normalize(t,a.type));
+    ids.add(t.id); rows.push(normalize(t,a.type,itemId,group));
     if(rows.length>50000) throw new Error("Mais de 50 mil transações. Reduza o período; total não calculado.");
    }
    if(!page.next) break;
@@ -96,21 +97,21 @@ export async function collect(request:<T>(path:string)=>Promise<T>,itemId:string
  const accountRows:AccountRow[]=accounts.map(a=>{
   if (a.itemId && a.itemId!==itemId) throw new Error("Conta retornada por Item diferente. Nenhum total será apresentado.");
   return {
-  conta_id:a.id,...connection,item_id:a.itemId??connection.item_id,tipo_conta:a.type,subtipo:a.subtype??null,nome:a.name??null,
+  conta_id:a.id,...connection,item_id:a.itemId??connection.item_id,grupo:group,tipo_conta:a.type,subtipo:a.subtype??null,nome:a.name??null,
   identificador_mascarado:a.number??null,
   saldo_centavos:a.balance==null?null:Math.round(a.balance*100),moeda:a.currencyCode??null,
   limite_credito_centavos:a.creditData?.creditLimit==null?null:Math.round(a.creditData.creditLimit*100),
   limite_disponivel_centavos:a.creditData?.availableCreditLimit==null?null:Math.round(a.creditData.availableCreditLimit*100),
   transacoes_no_periodo:rows.filter(row=>row.conta_id===a.id).length
  };});
- return {rows,accounts:accountRows,coverage:{complete:true,connections:1,accounts:accounts.length,transactions:rows.length,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy.",warnings:[] as string[]}};
+ return {rows,accounts:accountRows,coverage:{item_id:itemId,grupo:group,complete:true,connections:1,accounts:accounts.length,transactions:rows.length,lastUpdatedAt:item.lastUpdatedAt??null,scope:"1 conexão; somente dados disponibilizados pela Pluggy.",warnings:[] as string[]}};
 }
 
 /** Coleta as conexões configuradas. Falhas reais bloqueiam; conexões sem contas são reportadas como cobertura parcial. */
-export async function collectMany(request:<T>(path:string)=>Promise<T>,itemIds:string[],from:string,to:string) {
+export async function collectMany(request:<T>(path:string)=>Promise<T>,itemIds:string[],from:string,to:string,groups?:ReadonlyMap<string,ItemGroup>) {
  if (!itemIds.length) throw new Error("Nenhuma conexão Pluggy foi configurada.");
  const connectors=new Map<string,Promise<Connector|null>>();
- const collections=await Promise.all(itemIds.map(itemId=>collect(request,itemId,from,to,connectors)));
+ const collections=await Promise.all(itemIds.map(itemId=>collect(request,itemId,from,to,connectors,groups?.get(itemId)??"nao_classificado")));
  const rows=collections.flatMap(collection=>collection.rows);
  const accounts=collections.flatMap(collection=>collection.accounts);
  const accountIds=new Set<string>();
@@ -124,10 +125,29 @@ export async function collectMany(request:<T>(path:string)=>Promise<T>,itemIds:s
   transactionIds.add(row.id);
  }
  const connectionsWithoutAccounts=collections.filter(collection=>collection.coverage.accounts===0).length;
+ const coverageByGroup = new Map<ItemGroup, typeof collections>();
+ for (const collection of collections) {
+  const group = groups?.get(collection.coverage.item_id) ?? "nao_classificado";
+  coverageByGroup.set(group, [...(coverageByGroup.get(group) ?? []), collection]);
+ }
+ const groupCoverage = Object.fromEntries([...coverageByGroup].map(([group, groupCollections]) => {
+  const withoutAccounts = groupCollections.filter(collection => collection.coverage.accounts === 0).length;
+  return [group, {
+   complete: groupCollections.every(collection => collection.coverage.complete),
+   connections: groupCollections.length,
+   connections_with_accounts: groupCollections.length - withoutAccounts,
+   connections_without_accounts: withoutAccounts,
+   accounts: groupCollections.reduce((sum, collection) => sum + collection.coverage.accounts, 0),
+   transactions: groupCollections.reduce((sum, collection) => sum + collection.coverage.transactions, 0),
+   lastUpdatedAt: groupCollections.map(collection => collection.coverage.lastUpdatedAt),
+   warnings: withoutAccounts ? [`${withoutAccounts} conexão(ões) do grupo ${group} não retornaram contas; resultado parcial.`] : [],
+  }];
+ }));
  return {rows,accounts,coverage:{
   complete:collections.every(collection=>collection.coverage.complete),connections:itemIds.length,connections_with_accounts:itemIds.length-connectionsWithoutAccounts,connections_without_accounts:connectionsWithoutAccounts,accounts:accounts.length,transactions:rows.length,
   lastUpdatedAt:collections.map(collection=>collection.coverage.lastUpdatedAt),
   scope:`${itemIds.length} conexões; somente dados disponibilizados pela Pluggy.`,
-  warnings:connectionsWithoutAccounts?[`${connectionsWithoutAccounts} conexão(ões) configurada(s) não retornaram contas; resultado parcial.`]:[]
+  warnings:connectionsWithoutAccounts?[`${connectionsWithoutAccounts} conexão(ões) configurada(s) não retornaram contas; resultado parcial.`]:[],
+  by_group:groupCoverage,
  }};
 }

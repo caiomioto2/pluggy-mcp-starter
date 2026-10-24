@@ -10,6 +10,7 @@ import { TimedSnapshotCache } from "./cache.js";
 import { refreshItem, refreshStatus } from "./refresh.js";
 import { collectCards } from "./cards.js";
 import { PluggyHttpError, toPluggyError } from "./pluggy-errors.js";
+import { configuredItemGroups } from "./item-groups.js";
 
 const API_URL = "https://api.pluggy.ai";
 const PAGE_SIZE = 500;
@@ -52,10 +53,7 @@ function requiredEnvironment(name: string): string {
 }
 
 export function configuredItemIds(environment: NodeJS.ProcessEnv = process.env): string[] {
-  const raw = environment.PLUGGY_ITEM_IDS?.trim() || environment.PLUGGY_ITEM_ID?.trim();
-  if (!raw) throw new Error("Configure PLUGGY_ITEM_IDS com os itemIds das conexões Pluggy (ou PLUGGY_ITEM_ID para uma única conexão).");
-  const itemIds = raw.split(/[\s,;]+/).filter(Boolean).map(value => z.string().uuid().parse(value));
-  return [...new Set(itemIds)];
+  return configuredItemGroups(environment).all;
 }
 
 async function pluggyRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -133,29 +131,37 @@ export function createFinanceServer() {
   const date = z.string().refine(s => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0,10) === s, "Data inválida YYYY-MM-DD");
   server.registerTool("financeiro_query", {
     title: "Consultar contas e transações com SQL",
-    description: "SELECT SQLite somente leitura sobre contas e transações no período UTC informado. Em contas CREDIT, saldo_centavos é o uso atual retornado pela Pluggy: não é gasto do período nem valor de fatura. Para faturas, use financeiro_cartoes. contas inclui cada conta de cada conexão Pluggy configurada, inclusive sem transações. Reutiliza a coleta em memória por 15 minutos; um refresh invalida esse snapshot, então consulte novamente após o Item concluir. Consulte financeiro_schema antes de calcular totais.",
-    inputSchema: z.object({ sql: z.string().min(1).max(8000), from: date, to: date, limit: z.number().int().min(1).max(200).default(100) }).strict(),
+    description: "SELECT SQLite somente leitura sobre contas e transações no período UTC informado. Use grupo=pessoal ou grupo=agentik para limitar a consulta a esse grupo; sem grupo, consulta as conexões configuradas com a coluna grupo identificando cada linha. Em contas CREDIT, saldo_centavos é o uso atual retornado pela Pluggy: não é gasto do período nem valor de fatura. Para faturas, use financeiro_cartoes. Reutiliza a coleta em memória por 15 minutos; um refresh invalida esse snapshot, então consulte novamente após o Item concluir. Consulte financeiro_schema antes de calcular totais.",
+    inputSchema: z.object({ sql: z.string().min(1).max(8000), from: date, to: date, grupo: z.enum(["pessoal", "agentik"]).optional(), limit: z.number().int().min(1).max(200).default(100) }).strict(),
     annotations,
-  }, async ({sql, from, to, limit}) => {
+  }, async ({sql, from, to, grupo, limit}) => {
     try {
       if (from > to || (Date.parse(to)-Date.parse(from))/86400000 > 366) throw new Error("Use período ordenado de até 366 dias.");
       const key = from + ":" + to;
-      const snapshot = await cache.get(key, 900000, () => collectMany(pluggyRequest, configuredItemIds(), from, to));
-      const answer = await runQuery(snapshot.value.rows, snapshot.value.accounts, sql, limit);
-      return result({...answer, period: {from,to,timezone:"UTC"}, collectedAt: new Date(snapshot.at).toISOString(), coverage: snapshot.value.coverage, warnings: schema.warnings});
+      const configured = configuredItemGroups();
+      if (grupo && !configured.groupsConfigured) throw new Error("Configure os grupos Pessoal e Agentik antes de filtrar por grupo.");
+      const snapshot = await cache.get(key, 900000, () => collectMany(pluggyRequest, configured.all, from, to, configured.byItemId));
+      const rows = grupo ? snapshot.value.rows.filter(row => row.grupo === grupo) : snapshot.value.rows;
+      const accounts = grupo ? snapshot.value.accounts.filter(account => account.grupo === grupo) : snapshot.value.accounts;
+      const answer = await runQuery(rows, accounts, sql, limit);
+      const coverage = grupo ? snapshot.value.coverage.by_group[grupo] : snapshot.value.coverage;
+      return result({...answer, grupo: grupo ?? "todos", period: {from,to,timezone:"UTC"}, collectedAt: new Date(snapshot.at).toISOString(), coverage, warnings: schema.warnings});
     } catch (error) { return {isError:true, content:[{type:"text" as const,text:errorText(error)}]}; }
   });
   server.registerTool("financeiro_cartoes", {
     title: "Consultar cartões, faturas e parcelas",
     description: "Retorna cartões, uso total do limite em cards[].total_used, Bills, transações, parcelas e métricas separadas de gastos, total das faturas e pagamentos. Para saldo restante, consulte remaining_balance e bills[].reconciliation: compara totalAmount da fatura N com payments e financeCharges da fatura N+1 consecutiva já vencida, na mesma moeda. É uma fotografia dos ciclos do provedor, não dívida em tempo real; confira as_of e reference_due_date. Evidência ausente, ciclo ambíguo ou moeda diferente mantém remaining_amount_centavos NULL com reason; nunca presuma zero. O agregado é parcial quando coverage_complete=false e separa moedas. Pagamentos de transações bancárias e de cartão não entram novamente nessa conta. Expõe provider_status/raw_status, financial_state, provider_type, normalized_role, bill_id, datas e proveniência/confiança. PENDING é ambíguo: pode ser compra aberta, parcela futura ou pagamento pendente; não o some como se tudo pertencesse à fatura atual. Parcelas sem vínculo explícito de ciclo ficam installment_unassigned. Faturas a vencer são calculadas somente de Bills retornadas pela Pluggy. bill_coverage_by_card diferencia resposta vazia, erro e faturas fora do período; Bills vazio mantém cobertura incompleta. next_bill_estimate e o subtotal em cards[].next_bill são compras abertas observadas sem atribuição a Bill, nunca o total projetado; parcelas sem vínculo ficam excluídas e listadas separadamente. Sem billId/data de vencimento/ciclo fornecido, valores e parcelas não são atribuídos à próxima fatura. Pagamentos bancários e no cartão ficam em métricas separadas; pares por valor, moeda e data são candidatos heurísticos, não confirmação de quitação; status candidate_* não indicam que a fatura foi paga. Datas dos lançamentos são as datas da transação do provedor; em parcelas seu significado é desconhecido sem metadados. Campos de ciclo ausentes permanecem NULL.",
-    inputSchema: z.object({ from: date, to: date }).strict(),
+    inputSchema: z.object({ from: date, to: date, grupo: z.enum(["pessoal", "agentik"]).optional() }).strict(),
     annotations,
-  }, async ({ from, to }) => {
+  }, async ({ from, to, grupo }) => {
     try {
       if (from > to || (Date.parse(to) - Date.parse(from)) / 86400000 > 366) throw new Error("Use período ordenado de até 366 dias.");
-      const key = `${from}:${to}`;
-      const snapshot = await cardsCache.get(key, 900000, () => collectCards(pluggyRequest, configuredItemIds(), from, to));
-      return result({ ...snapshot.value, period: { from, to, timezone: "UTC" }, collectedAt: new Date(snapshot.at).toISOString() });
+      const configured = configuredItemGroups();
+      if (grupo && !configured.groupsConfigured) throw new Error("Configure os grupos Pessoal e Agentik antes de filtrar por grupo.");
+      const itemIds = grupo ? configured[grupo] : configured.all;
+      const key = `${from}:${to}:${grupo ?? "todos"}`;
+      const snapshot = await cardsCache.get(key, 900000, () => collectCards(pluggyRequest, itemIds, from, to));
+      return result({ ...snapshot.value, grupo: grupo ?? "todos", period: { from, to, timezone: "UTC" }, collectedAt: new Date(snapshot.at).toISOString() });
     } catch (error) { return { isError: true, content: [{ type: "text" as const, text: errorText(error) }] }; }
   });
   const itemId = z.string().uuid();

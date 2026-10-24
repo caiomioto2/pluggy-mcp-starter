@@ -38,8 +38,11 @@ Este projeto:
 Conecte cada banco e cartão no [Meu Pluggy](https://meu.pluggy.ai/). Cada conexão gera um `itemId`:
 
 ```env
-PLUGGY_ITEM_IDS=item-id-santander,item-id-nubank,item-id-itau
+PLUGGY_PERSONAL_ITEM_IDS=item-id-santander-pessoal,item-id-nubank-pessoal
+PLUGGY_AGENTIK_ITEM_IDS=item-id-itau-empresas,item-id-santander-empresas
 ```
+
+Para separar suas contas pessoais das contas da Agentik, configure `PLUGGY_PERSONAL_ITEM_IDS` e `PLUGGY_AGENTIK_ITEM_IDS`. As ferramentas `financeiro_query` e `financeiro_cartoes` aceitam `grupo: "pessoal"` ou `grupo: "agentik"`; sem esse filtro, os resultados incluem a coluna/escopo `grupo`. Configure os dois grupos juntos e não repita um Item ID entre eles. A configuração antiga `PLUGGY_ITEM_IDS` continua aceita, mas as conexões ficam como `nao_classificado`.
 
 > ⚠️ A API do Pluggy **não lista** `itemId`s existentes. Anote cada um quando conectar!
 
